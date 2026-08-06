@@ -26,17 +26,35 @@ def _run(cmd: list[str]) -> subprocess.CompletedProcess:
     return proc
 
 
+def _expected_chunks(chunk_dir, fallback: int) -> int:
+    """Chunk count from the manifest TTS wrote, which is the only record of how
+    long the script actually was once failed chunks are missing from disk."""
+    try:
+        manifest = json.loads((chunk_dir / "manifest.json").read_text(encoding="utf-8"))
+        if isinstance(manifest, list) and manifest:
+            return len(manifest)
+    except (OSError, json.JSONDecodeError, TypeError):
+        pass
+    return fallback
+
+
 def assemble(episode_id: str, cfg: dict) -> None:
     chunk_dir = CHUNKS_DIR / episode_id
     wavs = sorted(chunk_dir.glob("[0-9][0-9][0-9].wav"))
     if not wavs:
         raise PipelineError(f"no audio chunks found in {chunk_dir}")
 
-    # Note gaps (failed chunks) explicitly.
+    # How many chunks TTS was supposed to produce. Deriving the expected count
+    # from the files on disk cannot see a truncated tail: if the last chunks all
+    # failed, the highest surviving sequence number looks like the end of the
+    # script, and a half-length episode assembles silently.
     seqs = [int(p.stem) for p in wavs]
-    missing = sorted(set(range(seqs[-1] + 1)) - set(seqs))
+    expected = _expected_chunks(chunk_dir, fallback=seqs[-1] + 1)
+    missing = sorted(set(range(expected)) - set(seqs))
     if missing:
-        log.warning("assembling with missing chunks: %s", missing)
+        log.warning(
+            "assembling %d of %d chunks; missing %s", len(seqs), expected, missing
+        )
 
     acfg = cfg["audio"]
     silence_ms = int(acfg.get("seam_silence_ms", 250))
@@ -107,7 +125,9 @@ def assemble(episode_id: str, cfg: dict) -> None:
         db.stage_start(episode_id, "assembling:gaps")
         db.stage_end(
             episode_id, "assembling:gaps", ok=False,
-            detail=f"assembled with gaps at chunk(s) {missing}",
+            detail=(f"INCOMPLETE: assembled {len(seqs)} of {expected} chunks. "
+                    f"Missing chunk(s) {missing} — the audio is short by that much. "
+                    f"Retry from synthesizing to fill them in."),
         )
 
     for tmp in (silence, concat_list, joined):

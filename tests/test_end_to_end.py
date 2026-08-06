@@ -305,6 +305,78 @@ def test_failed_chunk_becomes_a_gap_not_a_failed_episode(env, tmp_path):
 
 
 @pytest.mark.skipif(not HAS_FFMPEG, reason="ffmpeg required")
+def test_truncated_tail_of_chunks_is_detected(env, tmp_path):
+    """The failure that shipped a 3-minute episode: when the LAST chunks fail,
+    the surviving sequence numbers look like a complete script, so a short
+    episode assembled with nothing reported."""
+    import db
+    from pipeline import ingest, run, tts
+
+    pdf = tmp_path / "paper.pdf"
+    _make_pdf(pdf)
+    episode_id = ingest.ingest_pdf(pdf, env["cfg"])
+
+    original = tts._synthesize_chunk
+
+    def only_first_two(eid, entry, wav_path, cfg):
+        if entry["seq"] >= 2:
+            raise RuntimeError("429 RESOURCE_EXHAUSTED")
+        original(eid, entry, wav_path, cfg)
+
+    tts._synthesize_chunk = only_first_two
+    try:
+        run.run_episode(episode_id, env["cfg"])
+    finally:
+        tts._synthesize_chunk = _ORIGINAL_SYNTH_CHUNK
+
+    row = db.get_episode(episode_id)
+    assert row["status"] == "done", "the surviving audio still assembles"
+
+    details = " ".join(s["detail"] or "" for s in db.get_stage_log(episode_id))
+    assert "INCOMPLETE" in details, "a truncated tail must be reported"
+    assert "of" in details and "chunks" in details
+
+    n_on_disk = len(list((env["chunks"] / episode_id).glob("[0-9][0-9][0-9].wav")))
+    assert n_on_disk == 2
+    manifest = json.loads((env["chunks"] / episode_id / "manifest.json").read_text())
+    assert len(manifest) > 2, "the script needed more chunks than were produced"
+
+
+def test_expected_chunk_count_falls_back_without_a_manifest(tmp_path):
+    from pipeline.assemble import _expected_chunks
+
+    assert _expected_chunks(tmp_path, fallback=3) == 3
+    (tmp_path / "manifest.json").write_text("not json")
+    assert _expected_chunks(tmp_path, fallback=3) == 3
+    (tmp_path / "manifest.json").write_text(json.dumps([{"seq": i} for i in range(7)]))
+    assert _expected_chunks(tmp_path, fallback=3) == 7
+
+
+@pytest.mark.skipif(not HAS_FFMPEG, reason="ffmpeg required")
+def test_incomplete_audio_is_flagged_on_the_episode_page(client, env, tmp_path):
+    import db
+    from pipeline import ingest, run, tts
+
+    pdf = tmp_path / "paper.pdf"
+    _make_pdf(pdf)
+    episode_id = ingest.ingest_pdf(pdf, env["cfg"])
+    original = tts._synthesize_chunk
+    tts._synthesize_chunk = (
+        lambda eid, entry, wav_path, cfg:
+        original(eid, entry, wav_path, cfg) if entry["seq"] < 2
+        else (_ for _ in ()).throw(RuntimeError("boom"))
+    )
+    try:
+        run.run_episode(episode_id, env["cfg"])
+    finally:
+        tts._synthesize_chunk = _ORIGINAL_SYNTH_CHUNK
+
+    html = client.get(f"/episode/{episode_id}").text
+    assert "Audio is incomplete" in html
+    assert "INCOMPLETE" in html
+
+
+@pytest.mark.skipif(not HAS_FFMPEG, reason="ffmpeg required")
 def test_resume_after_mid_tts_crash_does_not_regenerate_script(env, tmp_path):
     """Acceptance criterion 2: kill mid-TTS, restart, and the script is not
     regenerated while completed chunks are reused."""

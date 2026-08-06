@@ -130,6 +130,15 @@ audio { width: 100%; margin-top: 0.85rem; }
 .abstract summary { cursor: pointer; color: var(--muted); font-size: 0.9rem; }
 .abstract p { font-size: 0.95rem; line-height: 1.6; }
 
+/* incomplete-audio warning */
+.gapwarn {
+  border-left: 3px solid var(--err); background: #fdf2f1; padding: 0.85rem 1rem;
+  margin-top: 1.25rem; border-radius: 0 8px 8px 0;
+}
+.gapwarn h2 { margin: 0 0 0.35rem; color: var(--err); text-transform: none; letter-spacing: 0; font-size: 0.95rem; }
+.gapwarn p { margin: 0.25rem 0 0; font-size: 0.88rem; }
+@media (prefers-color-scheme: dark) { .gapwarn { background: #2a1a19; } }
+
 /* citation flags */
 .flagbox { border-left: 3px solid var(--flag); background: #fffbf3; padding: 0.85rem 1rem; margin-top: 2rem; border-radius: 0 8px 8px 0; }
 .flagbox h2 { margin: 0 0 0.35rem; color: var(--flag); text-transform: none; letter-spacing: 0; font-size: 0.95rem; }

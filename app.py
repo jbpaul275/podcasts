@@ -590,15 +590,19 @@ def episode_page(request: Request, episode_id: str):
         raise HTTPException(404, "no such episode")
 
     view = _episode_view(row)
+    stages = db.get_stage_log(episode_id) if admin_mode else []
+    gaps = [s["detail"] for s in stages
+            if s["stage"].endswith(":gaps") and s["detail"]]
     return templates.TemplateResponse(
         request,
         "episode.html",
         {
             "ep": view,
             "admin": admin_mode,
+            "gaps": gaps,
             "signed_in": admin_mode,
             "lines": _script_lines(row["script_md"], view["flags"]) if row["script_md"] else [],
-            "stages": db.get_stage_log(episode_id) if admin_mode else [],
+            "stages": stages,
             "retry_stages": run.STAGE_NAMES,
             "publish_blocker": publish_blocker(row) if admin_mode else None,
         },

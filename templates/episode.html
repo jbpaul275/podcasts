@@ -16,6 +16,13 @@
 
   {% if admin and ep.error %}<p class="error">{{ ep.error }}</p>{% endif %}
 
+  {% if admin and gaps %}
+    <section class="gapwarn">
+      <h2>Audio is incomplete</h2>
+      {% for g in gaps %}<p>{{ g }}</p>{% endfor %}
+    </section>
+  {% endif %}
+
   {% if ep.summary %}<p class="episodesummary">{{ ep.summary }}</p>{% endif %}
 
   {% if ep.has_audio %}
