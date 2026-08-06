@@ -1,5 +1,5 @@
-app = "paperpod"
-primary_region = "iad"   # change to the region nearest you
+app = "paperpod-jbp"
+primary_region = "dfw"
 
 [build]
 
