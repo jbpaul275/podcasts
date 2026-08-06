@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS episode (
   authors       TEXT,               -- JSON array
   year          INTEGER,
   abstract      TEXT,
+  summary       TEXT,               -- 1-2 sentence blurb for the library
   venue         TEXT,
   status        TEXT NOT NULL,      -- queued|extracting|scripting|synthesizing|assembling|done|failed
   script_md     TEXT,
@@ -69,7 +70,18 @@ def get_conn() -> sqlite3.Connection:
 
 
 def init_db() -> None:
-    get_conn().executescript(SCHEMA)
+    conn = get_conn()
+    conn.executescript(SCHEMA)
+    _migrate(conn)
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Additive column migrations, so an existing library survives an upgrade."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(episode)")}
+    for name, decl in (("summary", "TEXT"),):
+        if name not in cols:
+            conn.execute(f"ALTER TABLE episode ADD COLUMN {name} {decl}")
+    conn.commit()
 
 
 # ---- episode ----

@@ -175,11 +175,33 @@ def _fmt_duration(seconds) -> str:
     return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
 
 
+def _blurb(row, limit: int = 260) -> str:
+    """The listing summary. Prefers the model's written teaser; falls back to
+    the first sentences of the abstract for episodes made before summaries
+    existed."""
+    summary = (row["summary"] or "").strip()
+    if summary:
+        return summary
+
+    abstract = " ".join((row["abstract"] or "").split())
+    if not abstract:
+        return ""
+    sentences = re.findall(r"[^.!?]+[.!?]+(?:\s|$)", abstract) or [abstract]
+    out = ""
+    for sentence in sentences[:2]:
+        if out and len(out) + len(sentence) > limit:
+            break
+        out += sentence
+    out = out.strip() or abstract
+    return out if len(out) <= limit else out[:limit].rsplit(" ", 1)[0] + "…"
+
+
 def _episode_view(row) -> dict:
     flags = script_mod.citation_flags(row["script_md"]) if row["script_md"] else []
     return {
         "id": row["id"],
         "title": row["title"] or "(untitled)",
+        "summary": _blurb(row),
         "authors": db.episode_authors(row),
         "year": row["year"],
         "abstract": row["abstract"],
@@ -228,6 +250,8 @@ def library(request: Request):
             "episodes": episodes,
             "total_cost": sum(e["cost_usd"] for e in episodes),
             "feed_url": CFG["server"]["base_url"].rstrip("/") + "/feed.xml",
+            "feed_title": CFG.get("feed", {}).get("title", "Paperpod"),
+            "feed_description": CFG.get("feed", {}).get("description", ""),
         },
     )
 

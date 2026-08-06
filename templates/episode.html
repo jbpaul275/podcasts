@@ -29,7 +29,7 @@
   {% endif %}
 
   {% if ep.flags %}
-    <section class="flagbox">
+    <section class="flagbox" id="flags">
       <h2>{{ ep.flags|length }} citation-shaped string{{ '' if ep.flags|length == 1 else 's' }} flagged</h2>
       <p class="muted">Check each against the paper. The model was told not to invent citations, but this is where fabrications show up.</p>
       <ul>

@@ -410,6 +410,71 @@ def test_library_lists_episodes(client, env, tmp_path):
     assert "Jane Roe" in html
 
 
+def test_library_shows_summary_and_play_button(client, env, tmp_path):
+    import db
+    from pipeline import ingest
+
+    pdf = tmp_path / "a.pdf"
+    _make_pdf(pdf)
+    episode_id = ingest.ingest_pdf(pdf, env["cfg"])
+    db.update_episode(
+        episode_id, title="Border Counties", status="done",
+        summary="Raising the minimum wage barely moved employment.",
+        audio_path=str(pdf), duration_s=612.0,
+    )
+
+    html = client.get("/").text
+    assert "Raising the minimum wage barely moved employment." in html
+    assert f'data-src="/episode/{episode_id}/audio"' in html, "inline play button"
+    assert "10:12" in html
+
+
+def test_library_falls_back_to_abstract_when_no_summary(client, env, tmp_path):
+    """Episodes made before summaries existed still get a blurb."""
+    import db
+    from pipeline import ingest
+
+    pdf = tmp_path / "a.pdf"
+    _make_pdf(pdf)
+    episode_id = ingest.ingest_pdf(pdf, env["cfg"])
+    db.update_episode(
+        episode_id, title="Old Episode", status="done",
+        abstract="We study minimum wages. We use a border design. A third sentence "
+                 "that should not appear in the listing at all.",
+    )
+
+    html = client.get("/").text
+    assert "We study minimum wages. We use a border design." in html
+    assert "A third sentence" not in html
+
+
+def test_blurb_truncation():
+    import app as app_mod
+
+    long_abstract = "word " * 200
+    row = {"summary": None, "abstract": long_abstract}
+    out = app_mod._blurb(row)
+    assert len(out) <= 261 and out.endswith("…")
+
+    assert app_mod._blurb({"summary": "  A teaser.  ", "abstract": "ignored"}) == "A teaser."
+    assert app_mod._blurb({"summary": None, "abstract": None}) == ""
+
+
+def test_no_play_button_before_audio_exists(client, env, tmp_path):
+    import db
+    from pipeline import ingest
+
+    pdf = tmp_path / "a.pdf"
+    _make_pdf(pdf)
+    episode_id = ingest.ingest_pdf(pdf, env["cfg"])
+    db.update_episode(episode_id, title="Still Cooking", status="scripting")
+
+    html = client.get("/").text
+    assert "Still Cooking" in html
+    assert 'class="play"' not in html
+    assert "scripting" in html, "in-flight status still visible while browsing"
+
+
 def test_episode_page_shows_script_and_flags(client, env, tmp_path):
     import db
     from pipeline import ingest

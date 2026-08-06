@@ -105,5 +105,6 @@ def extract_metadata(episode_id: str, cfg: dict) -> None:
         authors=json.dumps([str(a) for a in authors]),
         year=year,
         abstract=(meta.get("abstract") or "").strip() or None,
+        summary=(meta.get("summary") or "").strip() or None,
         venue=(meta.get("venue_or_series") or "") or None,
     )

@@ -28,6 +28,51 @@
     });
   }
 
+  // ---- inline play buttons on the library ----
+  // One shared audio element, so starting a second episode stops the first.
+  const mini = document.getElementById("miniplayer");
+  if (mini) {
+    let active = null;
+
+    function reset(btn) {
+      if (!btn) return;
+      btn.classList.remove("playing");
+      btn.querySelector(".glyph").textContent = "▶";
+      btn.setAttribute("aria-label", btn.dataset.label);
+    }
+
+    document.querySelectorAll(".play").forEach((btn) => {
+      btn.dataset.label = btn.getAttribute("aria-label");
+      btn.addEventListener("click", () => {
+        if (active === btn) {
+          if (mini.paused) { mini.play(); } else { mini.pause(); }
+          return;
+        }
+        reset(active);
+        active = btn;
+        mini.src = btn.dataset.src;
+        mini.play().catch(() => {
+          reset(btn);
+          active = null;
+          alert("Could not play this episode.");
+        });
+      });
+    });
+
+    mini.addEventListener("play", () => {
+      if (!active) return;
+      active.classList.add("playing");
+      active.querySelector(".glyph").textContent = "❚❚";
+      active.setAttribute("aria-label", "Pause");
+    });
+    mini.addEventListener("pause", () => {
+      if (!active) return;
+      active.classList.remove("playing");
+      active.querySelector(".glyph").textContent = "▶";
+    });
+    mini.addEventListener("ended", () => { reset(active); active = null; });
+  }
+
   // ---- health line ----
   const health = document.getElementById("health");
   function pollHealth() {
