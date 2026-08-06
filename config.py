@@ -24,6 +24,15 @@ def load_config() -> dict:
         cfg.setdefault("server", {})["base_url"] = base_url
     if port := os.environ.get("PORT"):
         cfg.setdefault("server", {})["port"] = int(port)
+    # Model choice differs between a laptop on the free tier and a deployed
+    # instance, and editing the committed file for that collides with every
+    # pull. Environment wins.
+    for stage in ("metadata", "script", "tts"):
+        if model := os.environ.get(f"PAPERPOD_MODEL_{stage.upper()}"):
+            cfg.setdefault("models", {})[stage] = model
+    for host in ("a", "b"):
+        if voice := os.environ.get(f"PAPERPOD_VOICE_{host.upper()}"):
+            cfg.setdefault("voices", {})[f"host_{host}"] = voice
     for d in (INBOX_DIR, PROCESSED_DIR, PAPERS_DIR, CHUNKS_DIR, FINAL_DIR):
         d.mkdir(parents=True, exist_ok=True)
     return cfg

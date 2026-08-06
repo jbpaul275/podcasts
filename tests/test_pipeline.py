@@ -625,3 +625,38 @@ def test_chunk_prompt_includes_context_but_only_synthesizes_current(tmp_path, mo
     assert "Do NOT read those preceding lines aloud" in prompt
     for line in later["turns"]:
         assert line in prompt
+
+
+# ------------------------------------------------------ config env overrides
+
+def test_env_overrides_model_and_voice_choice(monkeypatch):
+    """Local and deployed instances differ on model choice; editing the
+    committed config for that collides with every pull."""
+    import importlib
+
+    import config
+
+    monkeypatch.setenv("PAPERPOD_MODEL_SCRIPT", "gemini-3-flash-preview")
+    monkeypatch.setenv("PAPERPOD_MODEL_TTS", "some-other-tts")
+    monkeypatch.setenv("PAPERPOD_VOICE_A", "Charon")
+    importlib.reload(config)
+    cfg = config.load_config()
+
+    assert cfg["models"]["script"] == "gemini-3-flash-preview"
+    assert cfg["models"]["tts"] == "some-other-tts"
+    assert cfg["voices"]["host_a"] == "Charon"
+    # Untouched keys keep their committed values.
+    assert cfg["models"]["metadata"] and cfg["voices"]["host_b"]
+
+
+def test_config_file_is_used_when_env_is_absent(monkeypatch):
+    import importlib
+
+    import config
+
+    for var in ("PAPERPOD_MODEL_METADATA", "PAPERPOD_MODEL_SCRIPT",
+                "PAPERPOD_MODEL_TTS", "PAPERPOD_VOICE_A", "PAPERPOD_VOICE_B"):
+        monkeypatch.delenv(var, raising=False)
+    importlib.reload(config)
+    cfg = config.load_config()
+    assert cfg["models"]["tts"].startswith("gemini")
