@@ -29,14 +29,29 @@
       {% if ep.status != 'done' %}<span class="status status-{{ ep.status }}">{{ ep.status }}</span>{% endif %}
       {% if ep.flag_count %}<a class="flagcount" href="/episode/{{ ep.id }}#flags">{{ ep.flag_count }} flag{{ '' if ep.flag_count == 1 else 's' }}</a>{% endif %}
     </p>
-
-    {% if ep.error %}<p class="error">{{ ep.error }}</p>{% endif %}
   </li>
 {% endfor %}
 </ul>
 
 {% if not episodes %}
-  <p class="empty">Nothing here yet. Drop a paper in below.</p>
+  <p class="empty">
+    {% if failed %}No finished episodes yet — see the failures below.{% else %}Nothing here yet. Drop a paper in below.{% endif %}
+  </p>
+{% endif %}
+
+{% if failed %}
+  <details class="failures">
+    <summary>{{ failed|length }} failed</summary>
+    <ul>
+      {% for ep in failed %}
+        <li>
+          <a href="/episode/{{ ep.id }}">{{ ep.title }}</a>
+          <button class="delete-episode linkish" type="button" data-episode="{{ ep.id }}">delete</button>
+          <span class="failreason">{{ ep.short_error }}</span>
+        </li>
+      {% endfor %}
+    </ul>
+  </details>
 {% endif %}
 
 <details class="addpaper">

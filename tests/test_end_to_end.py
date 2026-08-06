@@ -475,6 +475,56 @@ def test_no_play_button_before_audio_exists(client, env, tmp_path):
     assert "scripting" in html, "in-flight status still visible while browsing"
 
 
+def test_failures_are_collapsed_out_of_the_reading_list(client, env, tmp_path):
+    import db
+    from pipeline import ingest
+
+    for name, title, status, err in (
+        ("good", "A Finished Episode", "done", None),
+        ("bad", "A Broken Episode", "failed", "paper is 370 pages; limit is 120."),
+    ):
+        pdf = tmp_path / f"{name}.pdf"
+        _make_pdf(pdf)
+        eid = ingest.ingest_pdf(pdf, env["cfg"])
+        db.update_episode(eid, title=title, status=status, error=err,
+                          summary=f"Summary of {title}.")
+
+    html = client.get("/").text
+    assert "A Finished Episode" in html
+    assert "Summary of A Finished Episode." in html
+    # The failure is reachable but out of the main list, with no summary line.
+    assert "A Broken Episode" in html
+    assert "Summary of A Broken Episode." not in html
+    assert "1 failed" in html
+
+
+def test_long_error_is_truncated_in_the_library(client, env, tmp_path):
+    """A full ffmpeg stderr dump must not land in the listing."""
+    import db
+    from pipeline import ingest
+
+    pdf = tmp_path / "a.pdf"
+    _make_pdf(pdf)
+    eid = ingest.ingest_pdf(pdf, env["cfg"])
+    dump = "loudnorm measurement pass produced no JSON: " + ("size=N/A time=00:12:34 " * 80)
+    db.update_episode(eid, title="Noisy Failure", status="failed", error=dump)
+
+    html = client.get("/").text
+    assert "loudnorm measurement pass produced no JSON" in html
+    assert dump not in html, "the whole dump must not reach the library"
+    # ...but the episode page keeps it in full.
+    assert dump.strip() in client.get(f"/episode/{eid}").text
+
+
+def test_short_error_helper():
+    import app as app_mod
+
+    assert app_mod._short_error(None) == ""
+    assert app_mod._short_error("Boom. Details follow here.") == "Boom"
+    long = "x" * 400
+    assert len(app_mod._short_error(long)) <= 151
+
+
 def test_episode_page_shows_script_and_flags(client, env, tmp_path):
     import db
     from pipeline import ingest

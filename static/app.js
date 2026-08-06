@@ -94,14 +94,13 @@
   );
   if (working) setTimeout(() => window.location.reload(), 6000);
 
-  // ---- delete ----
-  const del = document.getElementById("delete-episode");
-  if (del) {
+  // ---- delete (episode page, and each row in the failures list) ----
+  document.querySelectorAll(".delete-episode").forEach((del) => {
     del.addEventListener("click", () => {
       if (!confirm("Delete this episode, its PDF, and its audio?")) return;
       fetch("/episode/" + del.dataset.episode, { method: "DELETE" })
-        .then((r) => { if (!r.ok) throw new Error(); window.location = "/"; })
+        .then((r) => { if (!r.ok) throw new Error(); window.location.reload(); })
         .catch(() => alert("Delete failed."));
     });
-  }
+  });
 })();

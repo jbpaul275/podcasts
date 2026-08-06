@@ -84,7 +84,22 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0
 .postmeta .flagcount { color: var(--flag); text-decoration: none; }
 .postmeta .flagcount:hover { text-decoration: underline; }
 
-.addpaper { margin-top: 3rem; border-top: 1px solid var(--rule); padding-top: 1.25rem; }
+/* Failures: reachable, not in the way. */
+.failures { margin-top: 2.5rem; border-top: 1px solid var(--rule); padding-top: 1.25rem; }
+.failures summary { cursor: pointer; color: var(--muted); font-size: 0.9rem; }
+.failures ul { list-style: none; padding: 0; margin: 0.9rem 0 0; }
+.failures li { padding: 0.5rem 0; border-bottom: 1px solid var(--rule); font-size: 0.88rem; }
+.failures li:last-child { border-bottom: none; }
+.failures a { color: var(--ink); text-decoration: none; font-weight: 550; }
+.failures a:hover { color: var(--a); text-decoration: underline; }
+.failreason { display: block; color: var(--muted); margin-top: 0.15rem; overflow-wrap: anywhere; }
+.linkish {
+  border: none; background: none; padding: 0 0 0 0.6rem; font-size: 0.8rem;
+  color: var(--muted); cursor: pointer; text-decoration: underline;
+}
+.linkish:hover { color: var(--err); }
+
+.addpaper { margin-top: 2rem; border-top: 1px solid var(--rule); padding-top: 1.25rem; }
 .addpaper summary { cursor: pointer; color: var(--muted); font-size: 0.9rem; }
 .addpaper .dropzone { margin-top: 1rem; }
 .libstats { margin: 0.75rem 0 0; }

@@ -272,15 +272,31 @@ def _script_lines(script_md: str, flags: list[dict]) -> list[dict]:
 # routes
 # --------------------------------------------------------------------------
 
+def _short_error(text: str | None, limit: int = 150) -> str:
+    """Errors can carry a whole ffmpeg stderr dump. The library gets a
+    readable first line; the episode page keeps the full text."""
+    if not text:
+        return ""
+    first = " ".join(text.split())
+    first = first.split(". ")[0]
+    return first if len(first) <= limit else first[:limit].rsplit(" ", 1)[0] + "…"
+
+
 @app.get("/", response_class=HTMLResponse)
 def library(request: Request):
-    episodes = [_episode_view(r) for r in db.list_episodes()]
+    all_episodes = [_episode_view(r) for r in db.list_episodes()]
+    # Failures are moved out of the reading list: they are maintenance, not
+    # something to browse. They stay reachable, collapsed, below the fold.
+    episodes = [e for e in all_episodes if e["status"] != "failed"]
+    failed = [{**e, "short_error": _short_error(e["error"])}
+              for e in all_episodes if e["status"] == "failed"]
     return templates.TemplateResponse(
         request,
         "library.html",
         {
             "episodes": episodes,
-            "total_cost": sum(e["cost_usd"] for e in episodes),
+            "failed": failed,
+            "total_cost": sum(e["cost_usd"] for e in all_episodes),
             "feed_url": CFG["server"]["base_url"].rstrip("/") + "/feed.xml",
             "feed_title": CFG.get("feed", {}).get("title", "Paperpod"),
             "feed_description": CFG.get("feed", {}).get("description", ""),
