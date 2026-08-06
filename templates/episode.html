@@ -4,7 +4,7 @@
 
 <article class="episode" data-episode="{{ ep.id }}" data-status="{{ ep.status }}">
   <h1>{{ ep.title }}</h1>
-  <p class="attribution">{{ ep.attribution }}</p>
+  <p class="attribution">This is an AI generated podcast drawing from {% if ep.source_url %}<a href="{{ ep.source_url }}" rel="noopener nofollow" target="_blank">“{{ ep.attrib_title }}”</a>{% else %}“{{ ep.attrib_title }}”{% endif %} by {{ ep.attrib_credit }}{{ ep.attrib_stop }}</p>
   <p class="authors">
     {%- if ep.year %}{{ ep.year }}{% endif %}{% if ep.venue %}{% if ep.year %} · {% endif %}{{ ep.venue }}{% endif %}
   </p>
@@ -117,6 +117,12 @@
       <label for="edit-authors">Authors</label>
       <input id="edit-authors" type="text" name="authors" value="{{ ep.authors|join(', ') }}">
       <p class="hint">Comma separated, in order. Collapses to “First Author et al.” past three.</p>
+
+      <label for="edit-url">Source URL</label>
+      <input id="edit-url" type="url" name="source_url" value="{{ ep.source_url or '' }}"
+             placeholder="https://…">
+      <p class="hint">Optional. When set, the paper title above becomes a link. Use it
+        for openly available papers; leave empty for anything paywalled.</p>
 
       <label for="edit-year">Year</label>
       <input id="edit-year" type="text" name="year" inputmode="numeric" value="{{ ep.year or '' }}">

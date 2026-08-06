@@ -26,7 +26,7 @@
       <a href="/episode/{{ ep.id }}">{{ ep.title }}</a>
     </h2>
 
-    <p class="attribution">{{ ep.attribution }}</p>
+    <p class="attribution">This is an AI generated podcast drawing from {% if ep.source_url %}<a href="{{ ep.source_url }}" rel="noopener nofollow" target="_blank">“{{ ep.attrib_title }}”</a>{% else %}“{{ ep.attrib_title }}”{% endif %} by {{ ep.attrib_credit }}{{ ep.attrib_stop }}</p>
 
     {% if ep.summary %}<p class="postsummary">{{ ep.summary }}</p>{% endif %}
 

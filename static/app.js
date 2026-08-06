@@ -106,12 +106,24 @@
   if (health) { pollHealth(); setInterval(pollHealth, 5000); }
 
   // ---- auto-refresh while anything is mid-pipeline ----
+  // Never reload out from under someone who is editing: a refresh collapses
+  // open forms and discards whatever they had typed.
+  function busyEditing() {
+    if (document.querySelector("details.editbox[open], details.addpaper[open]")) return true;
+    const el = document.activeElement;
+    return Boolean(el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName));
+  }
+
   const queueEl = document.getElementById("queue");
   const queued = queueEl ? Number(queueEl.dataset.count) > 0 : false;
   const working = queued || [...document.querySelectorAll("[data-status]")].some((el) =>
     WORKING.includes(el.dataset.status)
   );
-  if (working) setTimeout(() => window.location.reload(), 6000);
+  if (working) {
+    setInterval(() => {
+      if (!busyEditing()) window.location.reload();
+    }, 6000);
+  }
 
   // ---- delete (episode page, and each row in the failures list) ----
   document.querySelectorAll(".delete-episode").forEach((del) => {

@@ -15,7 +15,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from email.utils import format_datetime
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 from xml.sax.saxutils import escape as xml_escape
 
 from fastapi import FastAPI, Form, HTTPException, Request, UploadFile
@@ -248,6 +248,18 @@ def _attribution(paper_title: str | None, authors: list[str]) -> str:
     return f"This is an AI generated podcast drawing from “{title}” by {credit}{stop}"
 
 
+def safe_url(raw: str | None) -> str | None:
+    """Only http(s) links survive. This value is rendered into an href, so a
+    javascript: or data: URL here would be script injection on a public page."""
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    parsed = urlparse(raw)
+    if parsed.scheme in ("http", "https") and parsed.netloc:
+        return raw
+    return None
+
+
 _COST_STAGE_LABELS = {
     "metadata": "Metadata extraction",
     "script": "Script generation",
@@ -340,6 +352,10 @@ def _episode_view(row) -> dict:
         "episode_title": row["episode_title"] or "",
         "paper_title": paper_title,
         "attribution": _attribution(row["title"], authors),
+        "attrib_title": paper_title or "an untitled paper",
+        "attrib_credit": _author_credit(authors),
+        "attrib_stop": "" if _author_credit(authors).endswith(".") else ".",
+        "source_url": safe_url(row["source_url"]),
         "summary": _blurb(row),
         "authors": authors,
         "year": row["year"],
@@ -484,6 +500,8 @@ async def edit_episode(request: Request, episode_id: str):
     if "authors" in form:
         names = [" ".join(a.split()) for a in str(form["authors"]).split(",")]
         fields["authors"] = json.dumps([a for a in names if a])
+    if "source_url" in form:
+        fields["source_url"] = safe_url(str(form["source_url"]))
     if "year" in form:
         raw = sent("year") or ""
         try:
@@ -746,6 +764,8 @@ def feed():
         blurb = _blurb(row)
         if blurb:
             summary += "\n\n" + blurb
+        if source := safe_url(row["source_url"]):
+            summary += f"\n\nSource paper: {source}"
         try:
             pub = datetime.fromisoformat(row["created_at"])
         except ValueError:

@@ -1398,3 +1398,65 @@ def test_sidebar_shows_the_queue(public_client, env, tmp_path):
 def ingest_module():
     from pipeline import ingest
     return ingest
+
+
+# ------------------------------------------------------------- source URL
+
+def test_source_url_hyperlinks_the_paper_title(public_client, env, tmp_path):
+    public_client.post("/admin/login", data={"password": "hunter2"})
+    eid = _episode(env, tmp_path, title="Elite Capture and Social Stability",
+                   status="done", published=1, authors=json.dumps(["Jingjing Chen"]),
+                   audio_path=str(tmp_path / "a.pdf"))
+
+    public_client.post(f"/episode/{eid}/edit",
+                       data={"source_url": "https://www.nber.org/papers/w12345"})
+
+    import db
+    assert db.get_episode(eid)["source_url"] == "https://www.nber.org/papers/w12345"
+
+    for url in ("/", f"/episode/{eid}"):
+        html = public_client.get(url).text
+        assert 'href="https://www.nber.org/papers/w12345"' in html, f"no link on {url}"
+        assert 'rel="noopener nofollow"' in html
+
+
+def test_no_link_without_a_source_url(public_client, env, tmp_path):
+    _episode(env, tmp_path, title="Paywalled Paper", status="done", published=1,
+             authors=json.dumps(["A Person"]), audio_path=str(tmp_path / "a.pdf"))
+    html = public_client.get("/").text
+    assert "Paywalled Paper" in html
+    assert "<a href=\"http" not in html.split('class="attribution"')[1].split("</p>")[0]
+
+
+def test_only_http_urls_are_accepted():
+    """This value is rendered into an href on a public page."""
+    import app as app_mod
+
+    assert app_mod.safe_url("https://example.org/p.pdf") == "https://example.org/p.pdf"
+    assert app_mod.safe_url("http://example.org") == "http://example.org"
+    for bad in ("javascript:alert(1)", "data:text/html;base64,x", "  ", None,
+                "ftp://example.org", "example.org", "//evil.example"):
+        assert app_mod.safe_url(bad) is None, f"{bad!r} must not become an href"
+
+
+def test_dangerous_url_is_rejected_on_save(public_client, env, tmp_path):
+    import db
+
+    public_client.post("/admin/login", data={"password": "hunter2"})
+    eid = _episode(env, tmp_path, title="T", status="done")
+    public_client.post(f"/episode/{eid}/edit",
+                       data={"source_url": "javascript:alert(document.cookie)"})
+    assert db.get_episode(eid)["source_url"] is None
+
+
+@pytest.mark.skipif(not HAS_FFMPEG, reason="ffmpeg required")
+def test_feed_includes_the_source_paper_link(public_client, env, tmp_path):
+    import xml.etree.ElementTree as ET
+
+    import db
+
+    eid = _done_episode(env, tmp_path)
+    db.update_episode(eid, published=1, source_url="https://example.org/paper.pdf")
+
+    root = ET.fromstring(public_client.get("/feed.xml").content)
+    assert "https://example.org/paper.pdf" in root.find("channel/item/description").text
