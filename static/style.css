@@ -82,6 +82,7 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0
 /* Disclosure line: always present, never competing with the title. */
 .attribution { margin: 0 0 0.5rem; font-size: 0.85rem; color: var(--muted); line-height: 1.45; }
 .postsummary { margin: 0 0 0.5rem; line-height: 1.6; color: var(--ink); }
+.episodesummary { margin: 1.1rem 0 0; line-height: 1.65; font-size: 1.02rem; }
 .postmeta { display: flex; flex-wrap: wrap; gap: 0.7rem; margin: 0; font-size: 0.82rem; color: var(--muted); }
 .postmeta .flagcount { color: var(--flag); text-decoration: none; }
 .postmeta .flagcount:hover { text-decoration: underline; }

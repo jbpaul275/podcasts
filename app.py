@@ -197,6 +197,16 @@ def _fmt_duration(seconds) -> str:
 _SMALL_WORDS = {"a", "an", "and", "as", "at", "but", "by", "for", "from", "in",
                 "nor", "of", "on", "or", "the", "to", "via", "with"}
 
+# Acronyms that must survive title-casing an all-caps string. Without these,
+# "NBER WORKING PAPER SERIES" reads back as "Nber Working Paper Series".
+_ACRONYMS = {
+    "NBER", "IZA", "CEPR", "SSRN", "IMF", "OECD", "ECB", "BLS", "BEA", "IRS",
+    "FDA", "EPA", "CDC", "WHO", "UN", "EU", "US", "USA", "UK", "MIT", "UCLA",
+    "NYU", "LSE", "AER", "QJE", "JPE", "JEL", "PNAS", "GDP", "GNP", "CPI",
+    "RCT", "RCTS", "OLS", "IV", "GMM", "AI", "ML", "LLM", "COVID", "HIV",
+    "CEO", "CFO", "GPS", "STEM", "PISA", "NAEP", "SAT", "GED", "K-12",
+}
+
 
 def _decaps(text: str) -> str:
     """NBER and many journals print titles in all caps. Left alone they shout
@@ -204,9 +214,12 @@ def _decaps(text: str) -> str:
     so deliberate capitalization (RCT, GDP) in mixed-case titles survives."""
     if not text or not text.isupper():
         return text
-    words = text.lower().split()
     out = []
-    for i, w in enumerate(words):
+    for i, raw in enumerate(text.split()):
+        if raw.strip(".,:;()").upper() in _ACRONYMS:
+            out.append(raw)          # already correctly capitalized
+            continue
+        w = raw.lower()
         out.append(w if (w in _SMALL_WORDS and i) else w[:1].upper() + w[1:])
     return " ".join(out)
 

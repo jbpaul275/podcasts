@@ -16,13 +16,15 @@
 
   {% if admin and ep.error %}<p class="error">{{ ep.error }}</p>{% endif %}
 
+  {% if ep.summary %}<p class="episodesummary">{{ ep.summary }}</p>{% endif %}
+
   {% if ep.has_audio %}
     <audio class="player" controls preload="metadata" src="/episode/{{ ep.id }}/audio"></audio>
   {% else %}
     <p class="muted pending">No audio yet — this page refreshes itself while the episode is processing.</p>
   {% endif %}
 
-  {% if ep.abstract %}
+  {% if admin and ep.abstract %}
     <details class="abstract">
       <summary>Abstract</summary>
       <p>{{ ep.abstract }}</p>
@@ -49,7 +51,7 @@
     </details>
   {% endif %}
 
-  {% if lines %}
+  {% if admin and lines %}
     <section class="script">
       <h2>Script</h2>
       {% for line in lines %}

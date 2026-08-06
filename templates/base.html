@@ -10,7 +10,7 @@
 <body>
   <header class="topbar">
     {% block wordmark %}<a class="wordmark" href="/">← Library</a>{% endblock %}
-    <span class="health" id="health">&nbsp;</span>
+    {% if signed_in %}<span class="health" id="health">&nbsp;</span>{% endif %}
     {% if signed_in %}
       <a class="adminlink" href="/admin">Admin</a>
       <form class="logout" action="/admin/logout" method="post"><button type="submit">Sign out</button></form>

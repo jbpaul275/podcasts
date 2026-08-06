@@ -622,6 +622,9 @@ def test_attribution_helpers():
 
     assert app_mod._decaps("ALL CAPS TITLE OF THE PAPER") == "All Caps Title of the Paper"
     assert app_mod._decaps("A Mixed Case RCT Title") == "A Mixed Case RCT Title"
+    # Acronyms must not be mangled into "Nber".
+    assert app_mod._decaps("NBER WORKING PAPER SERIES") == "NBER Working Paper Series"
+    assert app_mod._decaps("THE EFFECT OF GDP ON US WAGES") == "The Effect of GDP on US Wages"
     assert app_mod._author_credit(["Solo Author"]) == "Solo Author"
     assert app_mod._author_credit(["A B", "C D"]) == "A B and C D"
     assert app_mod._author_credit(["A", "B", "C", "D"]) == "A et al."
@@ -1010,7 +1013,48 @@ def test_public_page_hides_operator_detail(public_client, env, tmp_path):
     )
     html = public_client.get(f"/episode/{eid}").text
 
-    assert "Live One" in html and "things happened" in html
+    assert "Live One" in html
     for leak in ("API cost", "0.64", "Stage log", "Delete episode",
                  "not found in the paper", "Visibility"):
         assert leak not in html, f"{leak!r} must not reach the public page"
+
+
+def test_public_page_is_audio_only(public_client, env, tmp_path):
+    """The public gets the title, the disclosure, a summary and the player --
+    not the transcript, the paper's abstract, or citation bookkeeping."""
+    import db
+
+    eid = _episode(
+        env, tmp_path, title="Live One", status="done", published=1,
+        episode_title="A Listenable Title", summary="One sentence of teaser.",
+        audio_path=str(tmp_path / "a.pdf"), flags_reviewed=1,
+        abstract="We study the effect of minimum wage increases on employment.",
+        script_md="HOST_A: A spoken line that must not appear as text.\n"
+                  "HOST_B: Card and Krueger (1994) is in the paper.",
+    )
+    html = public_client.get(f"/episode/{eid}").text
+
+    # Present: what a listener needs.
+    assert "A Listenable Title" in html
+    assert "One sentence of teaser." in html
+    assert "AI generated podcast" in html
+    assert f"/episode/{eid}/audio" in html
+
+    # Absent: everything else.
+    assert "A spoken line that must not appear as text" not in html, "no transcript"
+    assert "Abstract" not in html and "minimum wage increases" not in html
+    assert "traced back to the paper" not in html
+    assert "Card and Krueger" not in html
+
+
+def test_admin_still_sees_script_and_abstract(public_client, env, tmp_path):
+    public_client.post("/admin/login", data={"password": "hunter2"})
+    eid = _episode(
+        env, tmp_path, title="Live One", status="done", published=1,
+        abstract="We study the effect of minimum wage increases.",
+        script_md="HOST_A: A spoken line that must not appear as text.",
+    )
+    html = public_client.get(f"/episode/{eid}").text
+
+    assert "A spoken line that must not appear as text" in html, "review needs the script"
+    assert "minimum wage increases" in html
