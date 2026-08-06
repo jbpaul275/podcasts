@@ -32,6 +32,22 @@ _COMMON_SENTENCE_STARTERS = {
     "Might", "Must", "Have", "Has", "Had", "Host",
 }
 
+# Institutions and bodies. They are proper nouns and they sit near years
+# constantly ("Congress wrote into the 1964 statute"), but they are never the
+# author of a fabricated citation.
+_NON_AUTHOR_ENTITIES = {
+    "Congress", "Senate", "Parliament", "Court", "Supreme", "Government",
+    "Federal", "Reserve", "Treasury", "Bureau", "Department", "Ministry",
+    "Commission", "Council", "Committee", "Agency", "Administration",
+    "Union", "Party", "Republicans", "Democrats", "Labour", "Republican",
+    "Democratic", "Census", "Survey", "Act", "Amendment", "Constitution",
+    "America", "American", "British", "European", "Union's", "States",
+    "January", "February", "March", "April", "May", "June", "July",
+    "August", "September", "October", "November", "December",
+}
+
+_NOT_AUTHOR_TOKENS = _COMMON_SENTENCE_STARTERS | _NON_AUTHOR_ENTITIES
+
 # Name (2004) / Name and Name (2004) / Name et al. (2004)
 _NAME_YEAR_RE = re.compile(
     r"\b[A-Z][a-z]+(?:\s+(?:and|&)\s+[A-Z][a-z]+|\s+et\s+al\.?)?\s*\(\s*(?:19|20)\d{2}\s*\)"
@@ -42,6 +58,17 @@ _WORD_RE = re.compile(r"\b[\w'’-]+\b")
 
 # Lower number wins when two patterns overlap.
 _PRIORITY = {"name-year cite": 0, "et al.": 1, "proper noun near year": 2}
+
+# Statutes, treaties and the like are named entities that happen to carry a
+# year. They are never academic citations, so flagging them is pure noise.
+_STATUTE_RE = re.compile(
+    r"\b(?:Act|Amendment|Amendments|Law|Bill|Treaty|Convention|Accord|Accords"
+    r"|Protocol|Directive|Code|Constitution|Doctrine|Decree|Charter|Ruling"
+    r"|Resolution|Reform|Program|Programme|Initiative|Census|Survey|Panel"
+    r"|Recession|Crisis|War|Olympics|Election)\b"
+)
+
+_LEADING_NAME_RE = re.compile(r"^(?:[A-Z][\w'’-]*(?:\s+(?:and|&|of|for|de|van|von)\s+)?)+")
 
 
 def generate_script(episode_id: str, cfg: dict) -> str:
@@ -123,12 +150,42 @@ def parse_turns(script: str) -> list[tuple[str, str]]:
     return turns
 
 
-def citation_flags(script: str) -> list[dict]:
+def _normalize(text: str) -> str:
+    return " ".join(text.replace("’", "'").split()).casefold()
+
+
+def appears_in_paper(flag_text: str, paper_text_normalized: str) -> bool:
+    """Whether a flagged string traces back to the source PDF.
+
+    The whole phrase rarely appears verbatim -- the hosts paraphrase -- so the
+    test is whether the *name* does. "William Gould for the 1969" is fine if
+    the paper mentions Gould anywhere, and a fabrication if it does not.
+    """
+    if _normalize(flag_text) in paper_text_normalized:
+        return True
+    # Strip the trailing year and any connective tail, leaving the name.
+    stem = re.sub(r"\s*\(?\b(?:19|20)\d{2}\b\)?\s*$", "", flag_text).strip()
+    stem = re.sub(r"\s+(?:in|of|for|from|at|the|and|by|to)$", "", stem).strip()
+    if stem and _normalize(stem) in paper_text_normalized:
+        return True
+    m = _LEADING_NAME_RE.match(stem or flag_text)
+    if m:
+        name = m.group(0).strip()
+        # A single short token is too weak to prove anything either way.
+        if len(name) > 3 and _normalize(name) in paper_text_normalized:
+            return True
+    return False
+
+
+def citation_flags(script: str, paper_text: str | None = None) -> list[dict]:
     """Scan for citation-shaped patterns and return them for human review.
 
     Never auto-fails: the point is to put every string that *could* be a
     fabricated citation in front of a person, so a bare year sitting near a
     proper noun counts even though most such hits are innocent.
+
+    When `paper_text` is supplied, each flag also carries `in_paper`, which is
+    what separates a real fabrication from a name the paper actually uses.
     """
     flags: list[dict] = []
     for lineno, line in enumerate(script.splitlines(), start=1):
@@ -154,7 +211,7 @@ def citation_flags(script: str) -> list[dict]:
                 if (
                     len(token) > 2
                     and token[:1].isupper()
-                    and token not in _COMMON_SENTENCE_STARTERS
+                    and token not in _NOT_AUTHOR_TOKENS
                 ):
                     spans.append(
                         (w.start(), m.end(), "proper noun near year",
@@ -172,5 +229,14 @@ def citation_flags(script: str) -> list[dict]:
             kept.append(span)
 
         for start, _end, kind, text in sorted(kept):
-            flags.append({"line": lineno, "kind": kind, "text": text.strip()})
+            text = text.strip()
+            # A statute or named event carrying a year is not a citation.
+            if kind == "proper noun near year" and _STATUTE_RE.search(text):
+                continue
+            flags.append({"line": lineno, "kind": kind, "text": text})
+
+    if paper_text is not None:
+        normalized = _normalize(paper_text)
+        for flag in flags:
+            flag["in_paper"] = appears_in_paper(flag["text"], normalized)
     return flags

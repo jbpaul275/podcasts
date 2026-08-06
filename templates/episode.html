@@ -28,24 +28,35 @@
     </details>
   {% endif %}
 
-  {% if ep.flags %}
+  {% if ep.flags_unverified %}
     <section class="flagbox" id="flags">
-      <h2>{{ ep.flags|length }} citation-shaped string{{ '' if ep.flags|length == 1 else 's' }} flagged</h2>
-      <p class="muted">Check each against the paper. The model was told not to invent citations, but this is where fabrications show up.</p>
+      <h2>{{ ep.flags_unverified|length }} citation{{ '' if ep.flags_unverified|length == 1 else 's' }} not found in the paper</h2>
+      <p class="muted">These names or years do not appear in the source PDF. Check each one — this is where fabrications show up.</p>
       <ul>
-        {% for f in ep.flags %}<li><code>{{ f.text }}</code> <span class="muted">— {{ f.kind }}, line {{ f.line }}</span></li>{% endfor %}
+        {% for f in ep.flags_unverified %}<li><code>{{ f.text }}</code> <span class="muted">— {{ f.kind }}, line {{ f.line }}</span></li>{% endfor %}
       </ul>
     </section>
+  {% endif %}
+
+  {% if ep.flags_in_paper %}
+    <details class="flagbox verified" {% if not ep.flags_unverified %}id="flags"{% endif %}>
+      <summary>{{ ep.flags_in_paper|length }} citation-shaped string{{ '' if ep.flags_in_paper|length == 1 else 's' }} traced back to the paper</summary>
+      <p class="muted">Found in the source PDF, so not fabricated. Listed for completeness.</p>
+      <ul>
+        {% for f in ep.flags_in_paper %}<li><code>{{ f.text }}</code> <span class="muted">— line {{ f.line }}</span></li>{% endfor %}
+      </ul>
+    </details>
   {% endif %}
 
   {% if lines %}
     <section class="script">
       <h2>Script</h2>
       {% for line in lines %}
-        <p class="turn {{ 'host-a' if line.speaker == 'HOST_A' else 'host-b' }}{{ ' flagged' if line.flags }}">
+        {% set unverified = line.flags|rejectattr('in_paper')|list %}
+        <p class="turn {{ 'host-a' if line.speaker == 'HOST_A' else 'host-b' }}{{ ' flagged' if unverified }}">
           <span class="who">{{ 'A' if line.speaker == 'HOST_A' else 'B' }}</span>
           <span class="said">{{ line.text }}</span>
-          {% if line.flags %}<span class="inlineflag">⚑ {{ line.flags|map(attribute='text')|join(' · ') }}</span>{% endif %}
+          {% if unverified %}<span class="inlineflag">⚑ not in paper: {{ unverified|map(attribute='text')|join(' · ') }}</span>{% endif %}
         </p>
       {% endfor %}
     </section>

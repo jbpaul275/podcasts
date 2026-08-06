@@ -175,6 +175,29 @@ def _fmt_duration(seconds) -> str:
     return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
 
 
+_paper_text_cache: dict[str, str] = {}
+
+
+def _paper_text(episode_id: str) -> str | None:
+    """Full text of the source PDF, cached. Used to tell a real fabricated
+    citation from a name the paper genuinely uses."""
+    if episode_id in _paper_text_cache:
+        return _paper_text_cache[episode_id] or None
+    path = PAPERS_DIR / f"{episode_id}.pdf"
+    if not path.exists():
+        return None
+    try:
+        import fitz
+
+        with fitz.open(path) as doc:
+            text = "\n".join(page.get_text() for page in doc)
+    except Exception:
+        log.warning("could not extract text from %s for flag checking", path)
+        text = ""
+    _paper_text_cache[episode_id] = text
+    return text or None
+
+
 def _blurb(row, limit: int = 260) -> str:
     """The listing summary. Prefers the model's written teaser; falls back to
     the first sentences of the abstract for episodes made before summaries
@@ -197,7 +220,14 @@ def _blurb(row, limit: int = 260) -> str:
 
 
 def _episode_view(row) -> dict:
-    flags = script_mod.citation_flags(row["script_md"]) if row["script_md"] else []
+    flags = (
+        script_mod.citation_flags(row["script_md"], _paper_text(row["id"]))
+        if row["script_md"]
+        else []
+    )
+    # The count that matters is the one needing a human: strings that do not
+    # trace back to the paper. Everything else is dimmed, not hidden.
+    unverified = [f for f in flags if not f.get("in_paper")]
     return {
         "id": row["id"],
         "title": row["title"] or "(untitled)",
@@ -212,8 +242,10 @@ def _episode_view(row) -> dict:
         "duration_s": row["duration_s"],
         "duration": _fmt_duration(row["duration_s"]),
         "cost_usd": row["cost_usd"] or 0.0,
-        "flag_count": len(flags),
+        "flag_count": len(unverified),
         "flags": flags,
+        "flags_unverified": unverified,
+        "flags_in_paper": [f for f in flags if f.get("in_paper")],
         "has_audio": bool(row["audio_path"] and Path(row["audio_path"]).exists()),
     }
 

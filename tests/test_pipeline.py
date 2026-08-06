@@ -124,6 +124,68 @@ def test_citation_flags_ignore_ordinary_dialogue():
     assert citation_flags(clean) == []
 
 
+def test_statutes_and_named_events_are_not_flagged():
+    """Real false positives from a live run: a law and a named event that
+    happen to carry a year are never academic citations."""
+    from pipeline.script import citation_flags
+
+    script = "\n".join([
+        "HOST_A: The Civil Rights Act of 1964 changed the calculus.",
+        "HOST_B: What Congress wrote into the 1964 statute mattered.",
+        "HOST_A: That was before the 2008 Crisis reshaped everything.",
+        "HOST_B: The 1970 Census is the backbone of the sample.",
+    ])
+    assert citation_flags(script) == []
+
+
+def test_flags_are_checked_against_the_paper():
+    """The signal is whether a name traces back to the source PDF."""
+    from pipeline.script import citation_flags
+
+    script = (
+        "HOST_A: William Gould for the 1969 board decision.\n"
+        "HOST_B: And Fictitious Person in 1977 supposedly agreed."
+    )
+    paper = "... appointed William Gould to the board in 1969, which ..."
+
+    flags = {f["text"]: f["in_paper"] for f in citation_flags(script, paper)}
+    assert flags["William Gould for the 1969"] is True
+    assert flags["Fictitious Person in 1977"] is False
+
+
+def test_in_paper_absent_without_paper_text():
+    from pipeline.script import citation_flags
+
+    flags = citation_flags("HOST_B: See Angrist (2009).")
+    assert flags and "in_paper" not in flags[0]
+
+
+def test_appears_in_paper_matching():
+    from pipeline.script import _normalize, appears_in_paper
+
+    paper = _normalize("We follow Card and Krueger (1994). Later, Chetty et al. show ...")
+    assert appears_in_paper("Card and Krueger (1994)", paper)
+    assert appears_in_paper("Chetty et al.", paper)
+    assert not appears_in_paper("Imaginary and Fake (2011)", paper)
+
+
+def test_unverified_flag_count_drives_the_ui(tmp_path, monkeypatch):
+    """The library badge counts only what needs a human."""
+    import app as app_mod
+    import db
+
+    db.create_episode("EP1", "/tmp/a.pdf", "h")
+    db.update_episode(
+        "EP1", status="done",
+        script_md="HOST_A: The Civil Rights Act of 1964 and also Ghostwriter (1988).",
+    )
+    monkeypatch.setattr(app_mod, "_paper_text", lambda _id: "A paper mentioning nothing relevant.")
+
+    view = app_mod._episode_view(db.get_episode("EP1"))
+    assert view["flag_count"] == 1, "statute suppressed, fabrication counted"
+    assert view["flags_unverified"][0]["text"] == "Ghostwriter (1988)"
+
+
 def test_citation_flags_report_line_numbers():
     from pipeline.script import citation_flags
 

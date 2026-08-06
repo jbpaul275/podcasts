@@ -116,6 +116,9 @@ audio { width: 100%; margin-top: 0.85rem; }
 .flagbox h2 { margin: 0 0 0.35rem; color: var(--flag); text-transform: none; letter-spacing: 0; font-size: 0.95rem; }
 .flagbox ul { margin: 0.6rem 0 0; padding-left: 1.1rem; }
 .flagbox li { margin-bottom: 0.25rem; font-size: 0.9rem; }
+/* Traced back to the paper: real, but not what you need to look at. */
+.flagbox.verified { border-left-color: var(--rule); background: none; padding-left: 1rem; }
+.flagbox.verified summary { cursor: pointer; color: var(--muted); font-size: 0.9rem; }
 
 /* script view: generous line height, distinct left margin per speaker */
 .script .turn {
