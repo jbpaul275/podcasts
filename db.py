@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS episode (
   venue         TEXT,
   source_url    TEXT,               -- link to the paper, when it is public
   tts_model     TEXT,               -- overrides config for this episode
+  audio_built_at TEXT,              -- when this audio was assembled
   status        TEXT NOT NULL,      -- queued|extracting|scripting|synthesizing|assembling|done|failed
   script_md     TEXT,
   audio_path    TEXT,
@@ -85,7 +86,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
     """Additive column migrations, so an existing library survives an upgrade."""
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(episode)")}
     for name, decl in (("summary", "TEXT"), ("episode_title", "TEXT"),
-                       ("cost_json", "TEXT"), ("source_url", "TEXT"), ("tts_model", "TEXT"),
+                       ("cost_json", "TEXT"), ("source_url", "TEXT"), ("tts_model", "TEXT"), ("audio_built_at", "TEXT"),
                        ("published", "INTEGER DEFAULT 0"),
                        ("flags_reviewed", "INTEGER DEFAULT 0")):
         if name not in cols:
@@ -115,6 +116,37 @@ def list_episodes(published_only: bool = False) -> list[sqlite3.Row]:
     return get_conn().execute(
         f"SELECT * FROM episode {where} ORDER BY created_at DESC, id DESC"
     ).fetchall()
+
+
+def siblings(sha256: str | None, exclude_id: str) -> list[sqlite3.Row]:
+    """Other episodes built from the same PDF. Re-voicing a script produces one
+    of these, so they are alternate renderings of one paper rather than
+    different papers."""
+    if not sha256:
+        return []
+    return get_conn().execute(
+        "SELECT * FROM episode WHERE sha256 = ? AND id != ? ORDER BY created_at",
+        (sha256, exclude_id),
+    ).fetchall()
+
+
+def demote_siblings(sha256: str | None, keep_id: str) -> list[str]:
+    """Exactly one rendering of a paper may be public: the canonical one. Returns
+    the ids that were unpublished."""
+    if not sha256:
+        return []
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT id FROM episode WHERE sha256 = ? AND id != ? AND published = 1",
+        (sha256, keep_id),
+    ).fetchall()
+    if rows:
+        conn.execute(
+            "UPDATE episode SET published = 0 WHERE sha256 = ? AND id != ?",
+            (sha256, keep_id),
+        )
+        conn.commit()
+    return [r["id"] for r in rows]
 
 
 def find_by_sha(sha256: str) -> sqlite3.Row | None:

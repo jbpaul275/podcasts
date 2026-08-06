@@ -358,6 +358,7 @@ def _episode_view(row) -> dict:
         "source_url": safe_url(row["source_url"]),
         "tts_model": row["tts_model"] or CFG["models"]["tts"],
         "tts_model_pinned": bool(row["tts_model"]),
+        "audio_built_at": row["audio_built_at"],
         "script_md_present": bool(row["script_md"]),
         "summary": _blurb(row),
         "authors": authors,
@@ -534,6 +535,10 @@ def set_published(request: Request, episode_id: str,
         if blocker:
             raise HTTPException(400, f"cannot publish: {blocker}")
     db.update_episode(episode_id, published=1 if want else 0)
+    if want:
+        demoted = db.demote_siblings(row["sha256"], episode_id)
+        if demoted:
+            log.info("episode %s is now canonical; unpublished %s", episode_id, demoted)
     return RedirectResponse(f"/episode/{episode_id}", status_code=303)
 
 
@@ -692,6 +697,13 @@ def episode_page(request: Request, episode_id: str):
         raise HTTPException(404, "no such episode")
 
     view = _episode_view(row)
+    versions = []
+    if admin_mode:
+        for sib in db.siblings(row["sha256"], episode_id):
+            sv = _episode_view(sib)
+            versions.append(sv)
+        if versions:
+            versions.insert(0, view)
     stages = db.get_stage_log(episode_id) if admin_mode else []
     gaps = [s["detail"] for s in stages
             if s["stage"].endswith(":gaps") and s["detail"]]
@@ -708,6 +720,7 @@ def episode_page(request: Request, episode_id: str):
             "retry_stages": run.STAGE_NAMES,
             "publish_blocker": publish_blocker(row) if admin_mode else None,
             "tts_choices": tts_choices(),
+            "versions": versions,
         },
     )
 

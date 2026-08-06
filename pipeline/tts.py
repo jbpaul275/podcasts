@@ -87,6 +87,7 @@ def synthesize(episode_id: str, cfg: dict) -> None:
     )
 
     failed = []
+    last_error: Exception | None = None
     for entry in manifest:
         seq = entry["seq"]
         wav_path = out_dir / f"{seq:03d}.wav"
@@ -102,10 +103,17 @@ def synthesize(episode_id: str, cfg: dict) -> None:
         except Exception as e:
             log.error("chunk %03d failed, giving up on it: %s", seq, e)
             failed.append(seq)
+            last_error = e
 
     if failed:
         if len(failed) == len(manifest):
-            raise PipelineError("every TTS chunk failed; nothing to assemble")
+            # Carry the underlying reason: "every chunk failed" on its own sends
+            # you to the logs to find out what is actually wrong.
+            detail = str(last_error or "no error recorded")
+            raise PipelineError(
+                f"every TTS chunk failed using {model_for(episode_id, cfg)}; "
+                f"nothing to assemble. Last error: {detail[:400]}"
+            )
         # Partial failure: assemble the rest with a logged gap rather than
         # failing the whole episode.
         db.stage_start(episode_id, "synthesizing:gaps")

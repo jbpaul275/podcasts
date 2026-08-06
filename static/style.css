@@ -282,3 +282,14 @@ button, select { font: inherit; font-size: 0.9rem; padding: 0.35rem 0.7rem; bord
 .modeltable tr.tts { background: #f2f7fc; }
 @media (prefers-color-scheme: dark) { .modeltable tr.tts { background: #1a222b; } }
 ul.plain { list-style: none; padding: 0; margin: 0 0 0.5rem; }
+
+/* alternate renderings of one paper */
+.versions { border: 1px solid var(--rule); border-radius: 8px; padding: 0.9rem 1.1rem; margin-top: 2.5rem; }
+.versions h2 { margin: 0 0 0.35rem; }
+.versions p { margin: 0 0 0.8rem; }
+.versions table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+.versions th { text-align: left; color: var(--muted); font-weight: 600; padding: 0.3rem 0.6rem 0.3rem 0; border-bottom: 1px solid var(--rule); }
+.versions td { padding: 0.4rem 0.6rem 0.4rem 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+.versions tr:last-child td { border-bottom: none; }
+.versions tr.current td { font-weight: 600; }
+.versions .num { text-align: right; font-variant-numeric: tabular-nums; }

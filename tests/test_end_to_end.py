@@ -1603,3 +1603,108 @@ def test_models_page_lists_what_the_key_offers(public_client, monkeypatch):
 def test_models_page_is_admin_only(public_client):
     resp = public_client.get("/admin/models", follow_redirects=False)
     assert resp.status_code == 303
+
+
+# ------------------------------------------- multiple renderings of a paper
+
+@pytest.mark.skipif(not HAS_FFMPEG, reason="ffmpeg required")
+def test_publishing_one_rendering_demotes_the_others(public_client, env, tmp_path, monkeypatch):
+    """Exactly one rendering of a paper may be public, or the feed would carry
+    the same episode twice in different voices."""
+    import db
+    from pipeline import ingest, run
+
+    import app as app_mod
+    monkeypatch.setattr(app_mod, "tts_choices", lambda: ["model-a", "model-b"])
+    monkeypatch.setattr(app_mod, "PAPERS_DIR", env["papers"])
+    public_client.post("/admin/login", data={"password": "hunter2"})
+
+    pdf = tmp_path / "paper.pdf"
+    _make_pdf(pdf)
+    first = ingest.ingest_pdf(pdf, env["cfg"])
+    run.run_episode(first, env["cfg"])
+    db.update_episode(first, flags_reviewed=1)
+    public_client.post(f"/episode/{first}/publish", data={"published": "1"})
+    assert db.get_episode(first)["published"] == 1
+
+    resp = public_client.post(f"/episode/{first}/clone", data={"tts_model": "model-b"},
+                              follow_redirects=False)
+    second = resp.headers["location"].split("/")[2].split("?")[0]
+    run.run_episode(second, env["cfg"], from_stage="synthesizing")
+    db.update_episode(second, flags_reviewed=1)
+
+    public_client.post(f"/episode/{second}/publish", data={"published": "1"})
+    assert db.get_episode(second)["published"] == 1
+    assert db.get_episode(first)["published"] == 0, "the previous canonical steps down"
+
+    # And the public library carries one, not both.
+    assert len([r for r in db.list_episodes(published_only=True)]) == 1
+
+
+@pytest.mark.skipif(not HAS_FFMPEG, reason="ffmpeg required")
+def test_episode_page_lists_every_rendering(public_client, env, tmp_path, monkeypatch):
+    import db
+    from pipeline import ingest, run
+
+    import app as app_mod
+    monkeypatch.setattr(app_mod, "tts_choices", lambda: ["model-a", "model-b"])
+    monkeypatch.setattr(app_mod, "PAPERS_DIR", env["papers"])
+    public_client.post("/admin/login", data={"password": "hunter2"})
+
+    pdf = tmp_path / "paper.pdf"
+    _make_pdf(pdf)
+    first = ingest.ingest_pdf(pdf, env["cfg"])
+    run.run_episode(first, env["cfg"])
+    resp = public_client.post(f"/episode/{first}/clone", data={"tts_model": "model-b"},
+                              follow_redirects=False)
+    second = resp.headers["location"].split("/")[2].split("?")[0]
+    run.run_episode(second, env["cfg"], from_stage="synthesizing")
+
+    html = public_client.get(f"/episode/{first}").text
+    assert "2 renderings of this paper" in html
+    assert "model-b" in html, "the sibling's model is named"
+    assert db.get_episode(second)["audio_built_at"], "build time recorded"
+    assert db.get_episode(second)["audio_built_at"] in html
+
+
+def test_single_rendering_shows_no_versions_table(public_client, env, tmp_path):
+    public_client.post("/admin/login", data={"password": "hunter2"})
+    eid = _episode(env, tmp_path, title="Only One", status="done")
+    assert "renderings of this paper" not in public_client.get(f"/episode/{eid}").text
+
+
+def test_versions_are_admin_only(public_client, env, tmp_path, monkeypatch):
+    import db
+
+    eid = _episode(env, tmp_path, title="Live", status="done", published=1,
+                   audio_path=str(tmp_path / "a.pdf"))
+    row = db.get_episode(eid)
+    db.create_episode("SIB", "/tmp/s.pdf", row["sha256"], status="done")
+    db.update_episode("SIB", title="Sibling", status="done", tts_model="model-b")
+
+    html = public_client.get(f"/episode/{eid}").text
+    assert "renderings of this paper" not in html
+    assert "model-b" not in html
+
+
+def test_total_chunk_failure_names_the_reason(env, tmp_path, monkeypatch):
+    """"every TTS chunk failed" alone sends you to the logs to find out why."""
+    import db
+    from pipeline import PipelineError, ingest, tts
+
+    pdf = tmp_path / "paper.pdf"
+    _make_pdf(pdf)
+    eid = ingest.ingest_pdf(pdf, env["cfg"])
+    db.update_episode(eid, script_md=SAMPLE_SCRIPT, tts_model="gemini-does-not-exist")
+
+    def always_404(episode_id, entry, wav_path, cfg):
+        raise RuntimeError(
+            "404 NOT_FOUND. models/gemini-does-not-exist is not found for API version v1beta")
+
+    monkeypatch.setattr(tts, "_synthesize_chunk", always_404)
+    with pytest.raises(PipelineError) as exc:
+        tts.synthesize(eid, env["cfg"])
+
+    message = str(exc.value)
+    assert "gemini-does-not-exist" in message, "names the model that failed"
+    assert "404 NOT_FOUND" in message, "carries the underlying error"

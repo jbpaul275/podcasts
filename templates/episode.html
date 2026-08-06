@@ -133,10 +133,36 @@
     </form>
   </details>
 
+  {% if versions %}
+    <section class="versions">
+      <h2>{{ versions|length }} renderings of this paper</h2>
+      <p class="muted">Same paper, different voice models. Publishing one makes it the
+        canonical version and unpublishes the others, so the public site and the feed
+        always link to exactly one.</p>
+      <table>
+        <tr><th>Voice model</th><th>Built</th><th>Length</th><th>Cost</th><th></th></tr>
+        {% for v in versions %}
+          <tr class="{{ 'current' if v.id == ep.id }}{{ ' live' if v.published }}">
+            <td><code>{{ v.tts_model }}</code></td>
+            <td class="muted">{{ v.audio_built_at or '—' }}</td>
+            <td>{{ v.duration if v.has_audio else '—' }}</td>
+            <td class="num">${{ '%.3f'|format(v.cost_usd) }}</td>
+            <td>
+              {% if v.published %}<span class="status status-done">public</span>
+              {% elif v.id == ep.id %}<span class="muted">this page</span>
+              {% else %}<a href="/episode/{{ v.id }}">open</a>{% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </table>
+    </section>
+  {% endif %}
+
   <section class="ttsbox">
     <h2>Voice model</h2>
     <p><code>{{ ep.tts_model }}</code>{% if not ep.tts_model_pinned %}
-      <span class="muted">(config default)</span>{% endif %}</p>
+      <span class="muted">(config default)</span>{% endif %}
+      {% if ep.audio_built_at %}<br><span class="muted">audio built {{ ep.audio_built_at }}</span>{% endif %}</p>
     {% if ep.script_md_present and tts_choices|length > 1 %}
       <form action="/episode/{{ ep.id }}/clone" method="post">
         <label>Re-voice this script with
