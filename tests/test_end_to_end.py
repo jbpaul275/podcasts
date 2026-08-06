@@ -475,6 +475,74 @@ def test_no_play_button_before_audio_exists(client, env, tmp_path):
     assert "scripting" in html, "in-flight status still visible while browsing"
 
 
+def test_episode_title_and_attribution(client, env, tmp_path):
+    import db
+    from pipeline import ingest
+
+    pdf = tmp_path / "a.pdf"
+    _make_pdf(pdf)
+    eid = ingest.ingest_pdf(pdf, env["cfg"])
+    db.update_episode(
+        eid, status="done", summary="A blurb.",
+        title="AMBIGUOUS ATTRIBUTION: THEORY AND EVIDENCE",
+        authors=json.dumps(["Ricardo Alonso", "Monica Martinez-Bravo",
+                            "Gerard Padró I Miquel", "Carlos Sanz"]),
+        episode_title="Who gets blamed when nobody knows who decided",
+    )
+
+    for url in ("/", f"/episode/{eid}"):
+        html = client.get(url).text
+        assert "Who gets blamed when nobody knows who decided" in html
+        assert "This is an AI generated podcast drawing from" in html
+        assert "Ambiguous Attribution: Theory and Evidence" in html, "all-caps title normalized"
+        assert "Ricardo Alonso et al." in html, "long author list collapsed"
+        assert "AMBIGUOUS ATTRIBUTION" not in html
+
+
+def test_falls_back_to_paper_title_before_scripting(client, env, tmp_path):
+    import db
+    from pipeline import ingest
+
+    pdf = tmp_path / "a.pdf"
+    _make_pdf(pdf)
+    eid = ingest.ingest_pdf(pdf, env["cfg"])
+    db.update_episode(eid, title="A Perfectly Fine Paper Title", status="scripting",
+                      authors=json.dumps(["Jane Roe"]))
+
+    html = client.get("/").text
+    assert "A Perfectly Fine Paper Title" in html
+    assert "by Jane Roe" in html
+
+
+def test_attribution_helpers():
+    import app as app_mod
+
+    assert app_mod._decaps("ALL CAPS TITLE OF THE PAPER") == "All Caps Title of the Paper"
+    assert app_mod._decaps("A Mixed Case RCT Title") == "A Mixed Case RCT Title"
+    assert app_mod._author_credit(["Solo Author"]) == "Solo Author"
+    assert app_mod._author_credit(["A B", "C D"]) == "A B and C D"
+    assert app_mod._author_credit(["A", "B", "C", "D"]) == "A et al."
+    assert "uncredited" in app_mod._attribution("T", [])
+    # "et al." already carries a full stop; do not end up with "et al..".
+    assert app_mod._attribution("T", ["A", "B", "C", "D"]).endswith("by A et al.")
+    assert app_mod._attribution("T", ["Solo Author"]).endswith("by Solo Author.")
+
+
+@pytest.mark.skipif(not HAS_FFMPEG, reason="ffmpeg required")
+def test_feed_carries_episode_title_and_disclosure(client, env, tmp_path):
+    import xml.etree.ElementTree as ET
+
+    import db
+
+    eid = _done_episode(env, tmp_path)
+    db.update_episode(eid, episode_title="The Blame Nobody Claims")
+
+    root = ET.fromstring(client.get("/feed.xml").content)
+    item = root.find("channel/item")
+    assert item.find("title").text == "The Blame Nobody Claims"
+    assert "AI generated podcast" in item.find("description").text
+
+
 def test_failures_are_collapsed_out_of_the_reading_list(client, env, tmp_path):
     import db
     from pipeline import ingest

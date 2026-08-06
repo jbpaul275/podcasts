@@ -175,6 +175,40 @@ def _fmt_duration(seconds) -> str:
     return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
 
 
+_SMALL_WORDS = {"a", "an", "and", "as", "at", "but", "by", "for", "from", "in",
+                "nor", "of", "on", "or", "the", "to", "via", "with"}
+
+
+def _decaps(text: str) -> str:
+    """NBER and many journals print titles in all caps. Left alone they shout
+    on the page, so title-case them — but only when they really are all caps,
+    so deliberate capitalization (RCT, GDP) in mixed-case titles survives."""
+    if not text or not text.isupper():
+        return text
+    words = text.lower().split()
+    out = []
+    for i, w in enumerate(words):
+        out.append(w if (w in _SMALL_WORDS and i) else w[:1].upper() + w[1:])
+    return " ".join(out)
+
+
+def _author_credit(authors: list[str], max_named: int = 3) -> str:
+    if not authors:
+        return "an uncredited author"
+    if len(authors) > max_named:
+        return f"{authors[0]} et al."
+    if len(authors) == 1:
+        return authors[0]
+    return ", ".join(authors[:-1]) + " and " + authors[-1]
+
+
+def _attribution(paper_title: str | None, authors: list[str]) -> str:
+    title = _decaps((paper_title or "").strip()) or "an untitled paper"
+    credit = _author_credit(authors)
+    stop = "" if credit.endswith(".") else "."   # "et al." already ends a sentence
+    return f"This is an AI generated podcast drawing from “{title}” by {credit}{stop}"
+
+
 _paper_text_cache: dict[str, str] = {}
 
 
@@ -228,14 +262,20 @@ def _episode_view(row) -> dict:
     # The count that matters is the one needing a human: strings that do not
     # trace back to the paper. Everything else is dimmed, not hidden.
     unverified = [f for f in flags if not f.get("in_paper")]
+    authors = db.episode_authors(row)
+    paper_title = _decaps((row["title"] or "").strip())
     return {
         "id": row["id"],
-        "title": row["title"] or "(untitled)",
+        # The episode's own title, with the paper's as fallback until the
+        # scripting stage has written one.
+        "title": row["episode_title"] or paper_title or "(untitled)",
+        "paper_title": paper_title,
+        "attribution": _attribution(row["title"], authors),
         "summary": _blurb(row),
-        "authors": db.episode_authors(row),
+        "authors": authors,
         "year": row["year"],
         "abstract": row["abstract"],
-        "venue": row["venue"],
+        "venue": _decaps((row["venue"] or "").strip()) or None,
         "status": row["status"],
         "error": row["error"],
         "created_at": row["created_at"],
@@ -454,8 +494,13 @@ def feed():
         if not path.exists():
             continue
         authors = db.episode_authors(row)
-        title = row["title"] or "(untitled)"
-        summary = row["abstract"] or ""
+        title = row["episode_title"] or _decaps((row["title"] or "").strip()) or "(untitled)"
+        # The disclosure leads the description so it is visible in every
+        # podcast client, not just on the web page.
+        summary = _attribution(row["title"], authors)
+        blurb = _blurb(row)
+        if blurb:
+            summary += "\n\n" + blurb
         try:
             pub = datetime.fromisoformat(row["created_at"])
         except ValueError:

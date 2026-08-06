@@ -28,6 +28,9 @@ def _run_scripting(episode_id: str, cfg: dict) -> None:
     text = script.generate_script(episode_id, cfg)
     flags = script.citation_flags(text)
     db.update_episode(episode_id, script_md=text)
+    title = script.generate_title(episode_id, text, cfg)
+    if title:
+        db.update_episode(episode_id, episode_title=title)
     if flags:
         db.stage_start(episode_id, "scripting:flags")
         db.stage_end(

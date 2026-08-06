@@ -4,8 +4,9 @@
 
 <article class="episode" data-episode="{{ ep.id }}" data-status="{{ ep.status }}">
   <h1>{{ ep.title }}</h1>
+  <p class="attribution">{{ ep.attribution }}</p>
   <p class="authors">
-    {{ ep.authors|join(', ') if ep.authors else 'Unknown authors' }}{% if ep.year %} · {{ ep.year }}{% endif %}{% if ep.venue %} · {{ ep.venue }}{% endif %}
+    {%- if ep.year %}{{ ep.year }}{% endif %}{% if ep.venue %}{% if ep.year %} · {% endif %}{{ ep.venue }}{% endif %}
   </p>
   <p class="meta">
     <span class="status status-{{ ep.status }}">{{ ep.status }}</span>

@@ -4,12 +4,15 @@ Also home of the citation-flag validator, which regex-scans the finished script
 for citation-shaped strings and surfaces them for human review in the UI.
 """
 
+import logging
 import re
 
 import db
 from config import PAPERS_DIR, load_prompt
 from . import PipelineError
 from .gemini import client, pdf_part, record_cost, strip_fences
+
+log = logging.getLogger("paperpod.script")
 
 LINE_RE = re.compile(r"^HOST_[AB]:\s+\S")
 
@@ -121,6 +124,31 @@ def generate_script(episode_id: str, cfg: dict) -> str:
     if not script.strip():
         raise PipelineError("model returned an empty script")
     return script
+
+
+def generate_title(episode_id: str, script: str, cfg: dict) -> str | None:
+    """Title the episode from its own script, so the title reflects the angle
+    the hosts actually took rather than the paper's academic title."""
+    from google.genai import types
+
+    model = cfg["models"]["metadata"]  # a short, cheap call
+    try:
+        resp = client().models.generate_content(
+            model=model,
+            contents=load_prompt("episode_title.md") + script,
+            config=types.GenerateContentConfig(max_output_tokens=8000),
+        )
+        record_cost(episode_id, model, resp, cfg)
+    except Exception as e:
+        # A missing title is cosmetic; never fail the episode over it.
+        log.warning("episode title generation failed: %s", e)
+        return None
+
+    title = strip_fences(resp.text or "").strip().strip('"“”').strip()
+    title = " ".join(title.splitlines()[0].split()) if title else ""
+    if not title or len(title) > 120:
+        return None
+    return title
 
 
 def _clean(text: str) -> str:

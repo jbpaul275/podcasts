@@ -20,10 +20,11 @@
       <a href="/episode/{{ ep.id }}">{{ ep.title }}</a>
     </h2>
 
+    <p class="attribution">{{ ep.attribution }}</p>
+
     {% if ep.summary %}<p class="postsummary">{{ ep.summary }}</p>{% endif %}
 
     <p class="postmeta">
-      {% if ep.authors %}<span>{{ ep.authors|join(', ') }}</span>{% endif %}
       {% if ep.year %}<span>{{ ep.year }}</span>{% endif %}
       {% if ep.has_audio %}<span>{{ ep.duration }}</span>{% endif %}
       {% if ep.status != 'done' %}<span class="status status-{{ ep.status }}">{{ ep.status }}</span>{% endif %}

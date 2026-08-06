@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS episode (
   year          INTEGER,
   abstract      TEXT,
   summary       TEXT,               -- 1-2 sentence blurb for the library
+  episode_title TEXT,               -- LLM-written title for the episode itself
   venue         TEXT,
   status        TEXT NOT NULL,      -- queued|extracting|scripting|synthesizing|assembling|done|failed
   script_md     TEXT,
@@ -78,7 +79,7 @@ def init_db() -> None:
 def _migrate(conn: sqlite3.Connection) -> None:
     """Additive column migrations, so an existing library survives an upgrade."""
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(episode)")}
-    for name, decl in (("summary", "TEXT"),):
+    for name, decl in (("summary", "TEXT"), ("episode_title", "TEXT")):
         if name not in cols:
             conn.execute(f"ALTER TABLE episode ADD COLUMN {name} {decl}")
     conn.commit()
