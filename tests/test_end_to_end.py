@@ -184,8 +184,12 @@ def test_duplicate_pdf_is_skipped(env, tmp_path):
 
     copy = tmp_path / "paper-renamed.pdf"
     shutil.copy2(pdf, copy)
-    assert ingest.ingest_pdf(copy, env["cfg"]) is None, "same bytes = same episode"
-    assert len(db.list_episodes()) == 1
+    from pipeline import DuplicateEpisode
+
+    with pytest.raises(DuplicateEpisode) as exc:
+        ingest.ingest_pdf(copy, env["cfg"])
+    assert exc.value.episode_id == first, "points at the episode it already is"
+    assert len(db.list_episodes()) == 1, "same bytes = same episode"
 
 
 def test_ingest_never_mutates_source(env, tmp_path):
@@ -1239,12 +1243,12 @@ def test_empty_state_does_not_tell_the_public_to_upload(public_client, env, tmp_
 
     public = public_client.get("/").text
     assert "No episodes published yet." in public
-    for upload_cue in ("Drop a paper", "Add a paper", "Drop a PDF", "data/inbox"):
+    for upload_cue in ("Drop a paper", "Drop a PDF", "choose a file", "Queue"):
         assert upload_cue not in public, f"{upload_cue!r} points at nothing public"
 
     public_client.post("/admin/login", data={"password": "hunter2"})
     admin_html = public_client.get("/admin").text
-    assert "Add a paper" in admin_html and "Drop a PDF" in admin_html
+    assert "Drop a PDF" in admin_html and "Queue" in admin_html
 
 
 def test_admin_library_marks_public_and_private(public_client, env, tmp_path):
@@ -1313,3 +1317,84 @@ def test_admin_still_sees_script_and_abstract(public_client, env, tmp_path):
 
     assert "A spoken line that must not appear as text" in html, "review needs the script"
     assert "minimum wage increases" in html
+
+
+# ------------------------------------------------------- upload feedback
+
+def test_duplicate_upload_points_at_the_existing_episode(public_client, env, tmp_path):
+    """A duplicate used to redirect to the public library, which shows only
+    published episodes — so it looked exactly like a silent failure."""
+    import db
+
+    public_client.post("/admin/login", data={"password": "hunter2"})
+    pdf = tmp_path / "paper.pdf"
+    _make_pdf(pdf)
+    first = ingest_module().ingest_pdf(pdf, env["cfg"])
+
+    resp = public_client.post(
+        "/upload", files={"file": ("paper.pdf", pdf.read_bytes(), "application/pdf")},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert resp.headers["location"] == f"/episode/{first}?dup=1"
+    assert len(db.list_episodes()) == 1
+
+
+def test_rejected_upload_returns_a_readable_message(public_client, env, tmp_path):
+    """A scanned or over-long PDF used to dump raw JSON at the browser."""
+    public_client.post("/admin/login", data={"password": "hunter2"})
+    scan = tmp_path / "scan.pdf"
+    _make_pdf(scan, pages=1, text="Fig 1.")
+
+    resp = public_client.post(
+        "/upload", files={"file": ("scan.pdf", scan.read_bytes(), "application/pdf")},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert resp.headers["location"].startswith("/admin?error=")
+    assert "scanned" in resp.headers["location"]
+
+    assert "scanned" in public_client.get(resp.headers["location"]).text
+
+
+def test_upload_succeeds_while_another_episode_is_processing(public_client, env, tmp_path):
+    """The suspicion behind the sidebar: a second upload must still enqueue."""
+    import db
+
+    import app as app_mod
+
+    public_client.post("/admin/login", data={"password": "hunter2"})
+    busy = _episode(env, tmp_path, name="busy", title="Busy One", status="synthesizing")
+
+    second = tmp_path / "second.pdf"
+    _make_pdf(second, text="A different paper entirely. " * 40)
+    resp = public_client.post(
+        "/upload", files={"file": ("second.pdf", second.read_bytes(), "application/pdf")},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert resp.headers["location"].endswith("?queued=1")
+
+    new_id = resp.headers["location"].split("/")[2].split("?")[0]
+    assert new_id != busy
+    assert db.get_episode(new_id)["status"] == "queued"
+    assert app_mod.WORK_Q.qsize() >= 1, "it really is on the queue"
+
+
+def test_sidebar_shows_the_queue(public_client, env, tmp_path):
+    public_client.post("/admin/login", data={"password": "hunter2"})
+    _episode(env, tmp_path, name="a", title="Now Running", status="synthesizing")
+    _episode(env, tmp_path, name="b", title="Waiting Behind", status="queued")
+    _episode(env, tmp_path, name="c", title="All Finished", status="done", published=1)
+
+    html = public_client.get("/admin").text
+    queue_block = html.split('id="queue"')[1].split("</section>")[0]
+    assert "Now Running" in queue_block
+    assert "Waiting Behind" in queue_block
+    assert "All Finished" not in queue_block
+    assert 'data-count="2"' in html
+
+
+def ingest_module():
+    from pipeline import ingest
+    return ingest

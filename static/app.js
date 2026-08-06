@@ -22,9 +22,19 @@
       if (!file.name.toLowerCase().endsWith(".pdf")) { alert("PDFs only."); return; }
       const body = new FormData();
       body.append("file", file);
+      zone.classList.add("busy");
       fetch("/upload", { method: "POST", body, redirect: "follow" })
-        .then((r) => { window.location = r.url || "/"; })
-        .catch(() => alert("Upload failed."));
+        .then((r) => {
+          // The server redirects to the episode on success, to the duplicate's
+          // episode, or back to /admin with a readable error. Following it is
+          // always the right move; a non-OK response means something else broke.
+          if (!r.ok) throw new Error(r.status === 401 ? "Not signed in." : "Upload failed.");
+          window.location = r.url || "/admin";
+        })
+        .catch((e) => {
+          zone.classList.remove("busy");
+          alert(e.message || "Upload failed.");
+        });
     });
   }
 
@@ -96,7 +106,9 @@
   if (health) { pollHealth(); setInterval(pollHealth, 5000); }
 
   // ---- auto-refresh while anything is mid-pipeline ----
-  const working = [...document.querySelectorAll("[data-status]")].some((el) =>
+  const queueEl = document.getElementById("queue");
+  const queued = queueEl ? Number(queueEl.dataset.count) > 0 : false;
+  const working = queued || [...document.querySelectorAll("[data-status]")].some((el) =>
     WORKING.includes(el.dataset.status)
   );
   if (working) setTimeout(() => window.location.reload(), 6000);

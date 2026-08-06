@@ -45,6 +45,7 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0
   padding: 1.5rem; text-align: center; margin-bottom: 2rem; transition: border-color .15s, background .15s;
 }
 .dropzone.over { border-color: var(--a); background: #f2f7fc; }
+.dropzone.busy { opacity: 0.55; pointer-events: none; }
 .dropzone p { margin: 0.25rem 0; }
 .dropzone button { font: inherit; background: none; border: none; color: var(--a); text-decoration: underline; cursor: pointer; padding: 0; }
 
@@ -103,11 +104,31 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0
 }
 .linkish:hover { color: var(--err); }
 
-.addpaper { margin-top: 2rem; border-top: 1px solid var(--rule); padding-top: 1.25rem; }
-.addpaper summary { cursor: pointer; color: var(--muted); font-size: 0.9rem; }
-.addpaper .dropzone { margin-top: 1rem; }
-.libstats { margin: 0.75rem 0 0; }
 #miniplayer { display: none; }
+
+/* admin two-column layout: reading list, plus a sidebar that follows you */
+main.wide { max-width: 62rem; }
+.adminlayout { display: grid; grid-template-columns: minmax(0, 1fr) 15rem; gap: 2.5rem; align-items: start; }
+.sidebar { position: sticky; top: 1.5rem; display: grid; gap: 1.5rem; }
+.sidebar .dropzone { margin: 0; padding: 1.1rem 0.9rem; }
+.sidebar .dropzone p { font-size: 0.88rem; line-height: 1.5; }
+
+.queue h2 { margin: 0 0 0.5rem; font-size: 0.72rem; }
+.queue ol { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.6rem; }
+.queue li { font-size: 0.85rem; line-height: 1.35; }
+.queue li a { display: block; color: var(--ink); text-decoration: none; }
+.queue li a:hover { color: var(--a); }
+.queue .status { display: inline-block; margin-top: 0.2rem; }
+.queue .hint { font-size: 0.76rem; color: var(--muted); line-height: 1.45; margin: 0.75rem 0 0; }
+.sidestats { font-size: 0.78rem; color: var(--muted); line-height: 1.6; margin: 0; }
+.flash { padding: 0.6rem 0.8rem; background: #fdecea; border-radius: 6px; margin-bottom: 1.25rem; }
+@media (prefers-color-scheme: dark) { .flash { background: #33191a; } }
+
+/* Stack on anything narrower than a laptop; the sidebar goes to the bottom. */
+@media (max-width: 60rem) {
+  .adminlayout { grid-template-columns: 1fr; }
+  .sidebar { position: static; margin-top: 2.5rem; border-top: 1px solid var(--rule); padding-top: 1.5rem; }
+}
 .authors { color: var(--muted); margin: 0.3rem 0 0.5rem; font-size: 0.92rem; }
 .meta { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; margin: 0; font-size: 0.82rem; color: var(--muted); }
 .cost { font-variant-numeric: tabular-nums; }

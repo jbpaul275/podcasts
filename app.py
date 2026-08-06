@@ -41,7 +41,7 @@ from config import (
     ROOT,
     load_config,
 )
-from pipeline import PipelineError, ingest, run, script as script_mod
+from pipeline import DuplicateEpisode, PipelineError, ingest, run, script as script_mod
 
 logging.basicConfig(
     level=logging.INFO,
@@ -146,6 +146,9 @@ def _watch_inbox() -> None:
             pending.pop(path, None)
             try:
                 _enqueue_path(path, move_to_processed=True)
+            except DuplicateEpisode as e:
+                log.info("inbox skipped %s: %s", path.name, e)
+                _move_to_processed(path)
             except PipelineError as e:
                 log.error("inbox rejected %s: %s", path.name, e)
                 _move_to_processed(path)
@@ -444,10 +447,10 @@ def logout():
 
 
 @app.get("/admin", response_class=HTMLResponse)
-def admin(request: Request):
+def admin(request: Request, error: str = ""):
     if not auth.is_admin(request):
         return RedirectResponse("/admin/login", status_code=303)
-    return _render_library(request, admin_mode=True)
+    return _render_library(request, admin_mode=True, error=error)
 
 
 @app.post("/episode/{episode_id}/edit")
@@ -535,7 +538,7 @@ def library(request: Request):
     return _render_library(request, admin_mode=False)
 
 
-def _render_library(request: Request, admin_mode: bool):
+def _render_library(request: Request, admin_mode: bool, error: str = ""):
     all_episodes = [
         _episode_view(r) for r in db.list_episodes(published_only=not admin_mode)
     ]
@@ -553,6 +556,9 @@ def _render_library(request: Request, admin_mode: bool):
             "failed": failed,
             "admin": admin_mode,
             "signed_in": auth.is_admin(request),
+            "queue": [e for e in all_episodes if e["status"] in run.STAGE_NAMES
+                      or e["status"] == "queued"],
+            "error": error,
             "total_cost": sum(e["cost_usd"] for e in all_episodes),
             "feed_url": CFG["server"]["base_url"].rstrip("/") + "/feed.xml",
             "feed_title": CFG.get("feed", {}).get("title", "Paperpod"),
@@ -571,12 +577,15 @@ async def upload(request: Request, file: UploadFile):
         shutil.copyfileobj(file.file, out)
     try:
         episode_id = _enqueue_path(staged, move_to_processed=True)
+    except DuplicateEpisode as e:
+        # Not a failure: this paper is already in the library. Show the episode
+        # it landed as, rather than bouncing to a page that looks unchanged.
+        _move_to_processed(staged)
+        return RedirectResponse(f"/episode/{e.episode_id}?dup=1", status_code=303)
     except PipelineError as e:
         _move_to_processed(staged)
-        raise HTTPException(400, str(e))
-    if episode_id is None:
-        return RedirectResponse("/?dup=1", status_code=303)
-    return RedirectResponse(f"/episode/{episode_id}", status_code=303)
+        return RedirectResponse(f"/admin?error={quote(str(e))}", status_code=303)
+    return RedirectResponse(f"/episode/{episode_id}?queued=1", status_code=303)
 
 
 @app.get("/episode/{episode_id}", response_class=HTMLResponse)
