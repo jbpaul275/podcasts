@@ -392,6 +392,31 @@ def _done_episode(env, tmp_path, title="Minimum Wages and Employment"):
     return episode_id
 
 
+def test_static_assets_are_cache_busted(client):
+    """A stale cached app.js looks identical to a broken feature, so asset
+    URLs must change when the file does."""
+    import re as _re
+
+    html = client.get("/").text
+    css = _re.search(r'href="(/static/style\.css\?v=\d+)"', html)
+    js = _re.search(r'src="(/static/app\.js\?v=\d+)"', html)
+    assert css and js, "style.css and app.js must carry a version query"
+    assert client.get(css.group(1)).status_code == 200
+    assert client.get(js.group(1)).status_code == 200
+
+
+def test_static_version_changes_with_the_file(tmp_path, monkeypatch):
+    import app as app_mod
+
+    first = app_mod.static_url("app.js")
+    (app_mod.ROOT / "static" / "app.js").touch()
+    assert app_mod.static_url("app.js") != first or first.endswith("v=0")
+
+
+def test_favicon_is_declared(client):
+    assert 'rel="icon"' in client.get("/").text
+
+
 def test_health_route(client):
     body = client.get("/health").json()
     assert "queue_depth" in body and "worker_alive" in body

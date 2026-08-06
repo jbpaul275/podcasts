@@ -65,6 +65,19 @@ app = FastAPI(title="Paperpod", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 templates = Jinja2Templates(directory=str(ROOT / "templates"))
 
+
+def static_url(name: str) -> str:
+    """Cache-bust CSS and JS by mtime. Without this the browser happily serves
+    a stale app.js after an edit, which looks exactly like a broken feature."""
+    try:
+        stamp = int((ROOT / "static" / name).stat().st_mtime)
+    except OSError:
+        stamp = 0
+    return f"/static/{name}?v={stamp}"
+
+
+templates.env.globals["static_url"] = static_url
+
 WORK_Q: "queue.Queue[tuple[str, str | None]]" = queue.Queue()
 WORKER_STATE = {"alive": False, "current": None, "last_beat": None}
 
