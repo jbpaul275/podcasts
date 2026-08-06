@@ -171,7 +171,7 @@ def _synthesize_chunk(episode_id: str, entry: dict, wav_path, cfg: dict) -> None
                     speech_config=speech_config,
                 ),
             )
-            record_cost(episode_id, model, resp, cfg)
+            record_cost(episode_id, model, resp, cfg, stage="tts")
             data, mime = _extract_audio(resp)
             _write_wav(wav_path, data, mime)
             return

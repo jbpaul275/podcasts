@@ -29,7 +29,8 @@ CREATE TABLE IF NOT EXISTS episode (
   audio_path    TEXT,
   duration_s    REAL,
   error         TEXT,
-  cost_usd      REAL DEFAULT 0
+  cost_usd      REAL DEFAULT 0,
+  cost_json     TEXT                -- {stage: usd} breakdown
 );
 CREATE INDEX IF NOT EXISTS idx_episode_sha ON episode(sha256);
 
@@ -79,7 +80,8 @@ def init_db() -> None:
 def _migrate(conn: sqlite3.Connection) -> None:
     """Additive column migrations, so an existing library survives an upgrade."""
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(episode)")}
-    for name, decl in (("summary", "TEXT"), ("episode_title", "TEXT")):
+    for name, decl in (("summary", "TEXT"), ("episode_title", "TEXT"),
+                       ("cost_json", "TEXT")):
         if name not in cols:
             conn.execute(f"ALTER TABLE episode ADD COLUMN {name} {decl}")
     conn.commit()
@@ -123,13 +125,33 @@ def update_episode(id: str, **fields) -> None:
     conn.commit()
 
 
-def add_cost(id: str, usd: float) -> None:
+def add_cost(id: str, usd: float, stage: str = "other") -> None:
+    """Accumulate spend on the episode total and on the per-stage breakdown.
+    TTS dominates by a wide margin, so the split is what makes the number
+    actionable."""
     conn = get_conn()
+    row = conn.execute("SELECT cost_json FROM episode WHERE id = ?", (id,)).fetchone()
+    if row is None:
+        return
+    try:
+        breakdown = json.loads(row["cost_json"]) if row["cost_json"] else {}
+    except (json.JSONDecodeError, TypeError):
+        breakdown = {}
+    breakdown[stage] = round(breakdown.get(stage, 0.0) + usd, 8)
     conn.execute(
-        "UPDATE episode SET cost_usd = COALESCE(cost_usd, 0) + ? WHERE id = ?",
-        (usd, id),
+        "UPDATE episode SET cost_usd = COALESCE(cost_usd, 0) + ?, cost_json = ?"
+        " WHERE id = ?",
+        (usd, json.dumps(breakdown), id),
     )
     conn.commit()
+
+
+def cost_breakdown(row: sqlite3.Row) -> dict[str, float]:
+    try:
+        data = json.loads(row["cost_json"]) if row["cost_json"] else {}
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    return {k: float(v) for k, v in data.items()} if isinstance(data, dict) else {}
 
 
 def delete_episode(id: str) -> None:

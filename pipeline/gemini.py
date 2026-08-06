@@ -19,7 +19,8 @@ def client():
     return _client
 
 
-def record_cost(episode_id: str, model: str, response, cfg: dict) -> float:
+def record_cost(episode_id: str, model: str, response, cfg: dict,
+                stage: str = "other") -> float:
     """Compute USD cost from usage metadata and accumulate it on the episode."""
     usage = getattr(response, "usage_metadata", None)
     if usage is None:
@@ -35,7 +36,7 @@ def record_cost(episode_id: str, model: str, response, cfg: dict) -> float:
         tokens_out / 1e6
     ) * prices.get("output_per_1m", 0)
     if usd:
-        db.add_cost(episode_id, usd)
+        db.add_cost(episode_id, usd, stage)
     return usd
 
 

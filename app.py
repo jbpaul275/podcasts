@@ -209,6 +209,33 @@ def _attribution(paper_title: str | None, authors: list[str]) -> str:
     return f"This is an AI generated podcast drawing from “{title}” by {credit}{stop}"
 
 
+_COST_STAGE_LABELS = {
+    "metadata": "Metadata extraction",
+    "script": "Script generation",
+    "title": "Episode title",
+    "tts": "Speech synthesis",
+    "other": "Other",
+}
+
+
+def _cost_rows(row) -> list[dict]:
+    """Per-stage spend, largest first, with each stage's share of the total.
+    Speech synthesis normally dominates by an order of magnitude."""
+    breakdown = db.cost_breakdown(row)
+    total = sum(breakdown.values())
+    if not total:
+        return []
+    return [
+        {
+            "stage": stage,
+            "label": _COST_STAGE_LABELS.get(stage, stage),
+            "usd": usd,
+            "pct": round(100 * usd / total),
+        }
+        for stage, usd in sorted(breakdown.items(), key=lambda kv: -kv[1])
+    ]
+
+
 _paper_text_cache: dict[str, str] = {}
 
 
@@ -282,6 +309,7 @@ def _episode_view(row) -> dict:
         "duration_s": row["duration_s"],
         "duration": _fmt_duration(row["duration_s"]),
         "cost_usd": row["cost_usd"] or 0.0,
+        "cost_breakdown": _cost_rows(row),
         "flag_count": len(unverified),
         "flags": flags,
         "flags_unverified": unverified,

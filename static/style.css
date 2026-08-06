@@ -153,6 +153,15 @@ audio { width: 100%; margin-top: 0.85rem; }
 .script .turn.flagged { background: #fffbf3; }
 .inlineflag { display: block; margin-top: 0.3rem; color: var(--flag); font-size: 0.8rem; }
 
+/* cost breakdown */
+.costs table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+.costs td { padding: 0.3rem 0.6rem 0.3rem 0; border-bottom: 1px solid var(--rule); }
+.costs .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.costs .pct { color: var(--muted); width: 3.5rem; }
+.costs .bar { width: 40%; }
+.costs .bar span { display: block; height: 6px; border-radius: 3px; background: var(--a); min-width: 1px; }
+.costs .total td { font-weight: 600; border-bottom: none; }
+
 /* stage log */
 .stages table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
 .stages th { text-align: left; color: var(--muted); font-weight: 600; border-bottom: 1px solid var(--rule); padding: 0.35rem 0.5rem 0.35rem 0; }

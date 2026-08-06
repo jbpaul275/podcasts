@@ -63,6 +63,27 @@
     </section>
   {% endif %}
 
+  {% if ep.cost_breakdown %}
+    <section class="costs">
+      <h2>API cost</h2>
+      <table>
+        {% for c in ep.cost_breakdown %}
+        <tr>
+          <td>{{ c.label }}</td>
+          <td class="num">${{ '%.4f'|format(c.usd) }}</td>
+          <td class="num pct">{{ c.pct }}%</td>
+          <td class="bar"><span style="width: {{ c.pct }}%"></span></td>
+        </tr>
+        {% endfor %}
+        <tr class="total">
+          <td>Total</td>
+          <td class="num">${{ '%.4f'|format(ep.cost_usd) }}</td>
+          <td colspan="2"></td>
+        </tr>
+      </table>
+    </section>
+  {% endif %}
+
   <section class="stages">
     <h2>Stage log</h2>
     <table>

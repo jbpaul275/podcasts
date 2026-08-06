@@ -96,7 +96,7 @@ def generate_script(episode_id: str, cfg: dict) -> str:
     resp = client().models.generate_content(
         model=model, contents=[part, user], config=gen_cfg
     )
-    record_cost(episode_id, model, resp, cfg)
+    record_cost(episode_id, model, resp, cfg, stage="script")
     script = _clean(resp.text or "")
     violations = _format_violations(script)
 
@@ -112,7 +112,7 @@ def generate_script(episode_id: str, cfg: dict) -> str:
         resp = client().models.generate_content(
             model=model, contents=[part, retry_msg], config=gen_cfg
         )
-        record_cost(episode_id, model, resp, cfg)
+        record_cost(episode_id, model, resp, cfg, stage="script")
         script = _clean(resp.text or "")
         violations = _format_violations(script)
         if violations:
@@ -138,7 +138,7 @@ def generate_title(episode_id: str, script: str, cfg: dict) -> str | None:
             contents=load_prompt("episode_title.md") + script,
             config=types.GenerateContentConfig(max_output_tokens=8000),
         )
-        record_cost(episode_id, model, resp, cfg)
+        record_cost(episode_id, model, resp, cfg, stage="title")
     except Exception as e:
         # A missing title is cosmetic; never fail the episode over it.
         log.warning("episode title generation failed: %s", e)

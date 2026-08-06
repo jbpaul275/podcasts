@@ -82,7 +82,7 @@ def extract_metadata(episode_id: str, cfg: dict) -> None:
         contents=[pdf_part(pdf_path), load_prompt("metadata.md")],
         config=types.GenerateContentConfig(response_mime_type="application/json"),
     )
-    record_cost(episode_id, model, resp, cfg)
+    record_cost(episode_id, model, resp, cfg, stage="metadata")
 
     raw = strip_fences(resp.text or "")
     try:

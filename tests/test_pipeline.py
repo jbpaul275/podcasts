@@ -329,6 +329,55 @@ def test_cost_accumulates_across_stages():
     assert db.get_episode("EP1")["cost_usd"] == pytest.approx(0.252)
 
 
+def test_cost_is_broken_down_by_stage():
+    import db
+
+    db.create_episode("EP1", "/tmp/a.pdf", "h")
+    db.add_cost("EP1", 0.0051, "metadata")
+    db.add_cost("EP1", 0.0104, "script")
+    db.add_cost("EP1", 0.0009, "title")
+    for _ in range(7):                      # one call per TTS chunk
+        db.add_cost("EP1", 0.0893, "tts")
+
+    row = db.get_episode("EP1")
+    breakdown = db.cost_breakdown(row)
+    assert breakdown["tts"] == pytest.approx(0.6251)
+    assert breakdown["script"] == pytest.approx(0.0104)
+    assert sum(breakdown.values()) == pytest.approx(row["cost_usd"])
+
+
+def test_cost_rows_are_ranked_with_shares():
+    import app as app_mod
+    import db
+
+    db.create_episode("EP1", "/tmp/a.pdf", "h")
+    db.add_cost("EP1", 0.90, "tts")
+    db.add_cost("EP1", 0.10, "script")
+
+    rows = app_mod._cost_rows(db.get_episode("EP1"))
+    assert [r["stage"] for r in rows] == ["tts", "script"], "largest first"
+    assert rows[0]["pct"] == 90 and rows[1]["pct"] == 10
+    assert rows[0]["label"] == "Speech synthesis"
+
+
+def test_cost_rows_empty_when_nothing_spent():
+    import app as app_mod
+    import db
+
+    db.create_episode("EP1", "/tmp/a.pdf", "h")
+    assert app_mod._cost_rows(db.get_episode("EP1")) == []
+
+
+def test_cost_breakdown_survives_corrupt_json():
+    import db
+
+    db.create_episode("EP1", "/tmp/a.pdf", "h")
+    db.update_episode("EP1", cost_json="{not json")
+    assert db.cost_breakdown(db.get_episode("EP1")) == {}
+    db.add_cost("EP1", 0.5, "tts")  # must recover rather than raise
+    assert db.cost_breakdown(db.get_episode("EP1")) == {"tts": 0.5}
+
+
 def test_stage_log_start_and_end():
     import db
 
