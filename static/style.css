@@ -154,6 +154,25 @@ audio { width: 100%; margin-top: 0.85rem; }
 .script .turn.flagged { background: #fffbf3; }
 .inlineflag { display: block; margin-top: 0.3rem; color: var(--flag); font-size: 0.8rem; }
 
+/* site footer */
+.sitefoot {
+  max-width: var(--maxw); margin: 0 auto; padding: 1.5rem 1.25rem 3rem;
+  border-top: 1px solid var(--rule); display: flex; flex-wrap: wrap; gap: 0.75rem;
+  font-size: 0.78rem; color: var(--muted);
+}
+.sitefoot a { color: var(--muted); }
+.sitefoot a:hover { color: var(--a); }
+
+/* terms page */
+.terms { max-width: 38rem; }
+.terms h1 { margin-bottom: 0.25rem; }
+.terms h2 {
+  text-transform: none; letter-spacing: -0.005em; font-size: 1.05rem;
+  color: var(--ink); margin: 2rem 0 0.5rem;
+}
+.terms p { line-height: 1.7; margin: 0 0 0.9rem; }
+.lastupdated { margin-bottom: 2rem; }
+
 /* admin chrome */
 .adminlink { font-size: 0.8rem; color: var(--muted); text-decoration: none; }
 .adminlink:hover { color: var(--a); }

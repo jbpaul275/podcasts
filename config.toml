@@ -39,8 +39,13 @@ port     = 8000
 
 [feed]
 title       = "Paperpod"
-description = "Two-host discussions of academic papers, generated locally."
+description = "AI Generated Podcast Discussions of Important Papers."
 author      = "Paperpod"
+
+[site]
+# Shown on the terms page and used as the podcast owner contact in the feed.
+owner_name    = "Josh Paul"
+contact_email = "jbpaul275@gmail.com"
 
 # USD per 1M tokens. TTS prices are the documented preview prices; the two
 # text-model prices are estimates -- verify against current Gemini pricing.

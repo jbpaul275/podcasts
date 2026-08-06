@@ -84,6 +84,9 @@ def static_url(name: str) -> str:
 
 templates.env.globals["static_url"] = static_url
 
+# Bump when the terms text changes materially.
+TERMS_UPDATED = "6 August 2026"
+
 WORK_Q: "queue.Queue[tuple[str, str | None]]" = queue.Queue()
 WORKER_STATE = {"alive": False, "current": None, "last_beat": None}
 
@@ -464,6 +467,23 @@ def set_published(request: Request, episode_id: str,
     return RedirectResponse(f"/episode/{episode_id}", status_code=303)
 
 
+@app.get("/terms", response_class=HTMLResponse)
+def terms(request: Request):
+    site = CFG.get("site", {})
+    return templates.TemplateResponse(
+        request,
+        "terms.html",
+        {
+            "admin": False,
+            "signed_in": auth.is_admin(request),
+            "feed_title": CFG.get("feed", {}).get("title", "Paperpod"),
+            "owner_name": site.get("owner_name", "the site operator"),
+            "contact_email": site.get("contact_email", ""),
+            "updated": TERMS_UPDATED,
+        },
+    )
+
+
 @app.get("/", response_class=HTMLResponse)
 def library(request: Request):
     return _render_library(request, admin_mode=False)
@@ -651,6 +671,7 @@ def health(request: Request):
 def feed():
     base = CFG["server"]["base_url"].rstrip("/")
     fcfg = CFG.get("feed", {})
+    scfg = CFG.get("site", {})
     items = []
     for row in db.list_episodes(published_only=True):
         if not row["audio_path"]:
@@ -694,6 +715,10 @@ def feed():
     <language>en-us</language>
     <itunes:author>{xml_escape(fcfg.get('author', 'Paperpod'))}</itunes:author>
     <itunes:summary>{xml_escape(fcfg.get('description', ''))}</itunes:summary>
+    <itunes:owner>
+      <itunes:name>{xml_escape(scfg.get('owner_name', ''))}</itunes:name>
+      <itunes:email>{xml_escape(scfg.get('contact_email', ''))}</itunes:email>
+    </itunes:owner>
     <itunes:explicit>false</itunes:explicit>
     <itunes:image href="{base}/static/cover.png"/>
     <itunes:category text="Science"/>
