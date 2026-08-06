@@ -660,3 +660,50 @@ def test_config_file_is_used_when_env_is_absent(monkeypatch):
     importlib.reload(config)
     cfg = config.load_config()
     assert cfg["models"]["tts"].startswith("gemini")
+
+
+# ------------------------------------------------------- model catalogue
+
+def test_every_offered_tts_model_has_a_price():
+    """An unpriced model is silently costed at zero, which is the one number a
+    model comparison is trying to read."""
+    import tomllib
+
+    cfg = tomllib.load(open("config.toml", "rb"))
+    offered = set(cfg["tts"]["models"]) | {cfg["models"]["tts"]}
+    missing = sorted(offered - set(cfg["costs"]))
+    assert not missing, f"no [costs] entry for {missing}"
+
+
+def test_picker_offers_no_live_api_models():
+    """Live models are bidirectional streaming and unreachable through the
+    generateContent call this pipeline makes; one here fails every chunk."""
+    import tomllib
+
+    cfg = tomllib.load(open("config.toml", "rb"))
+    for name in cfg["tts"]["models"]:
+        assert "live" not in name, f"{name} is a Live API model"
+        assert "native-audio" not in name, f"{name} is a Live API model"
+        assert "tts" in name, f"{name} does not look like a TTS model"
+
+
+def test_unpriced_model_warns_rather_than_reporting_zero(caplog, monkeypatch):
+    import db
+    from pipeline import gemini
+
+    monkeypatch.setattr(gemini, "_UNPRICED_WARNED", set())
+    db.create_episode("EP1", "/tmp/a.pdf", "h")
+
+    class Resp:
+        usage_metadata = type("U", (), {"prompt_token_count": 100,
+                                        "candidates_token_count": 5000})()
+
+    with caplog.at_level("WARNING"):
+        usd = gemini.record_cost("EP1", "unpriced-model", Resp(), {"costs": {}}, "tts")
+    assert usd == 0.0
+    assert "reported as $0.00" in caplog.text
+
+    caplog.clear()
+    with caplog.at_level("WARNING"):
+        gemini.record_cost("EP1", "unpriced-model", Resp(), {"costs": {}}, "tts")
+    assert "reported as $0.00" not in caplog.text, "warns once per model, not per chunk"
