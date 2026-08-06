@@ -12,6 +12,9 @@ target_words = 1600
 max_pages    = 120
 
 [tts]
+# Models offered in the upload picker, first one the default. Verify IDs
+# against /admin/models before adding — a wrong ID 404s every chunk.
+models = ["gemini-3.1-flash-tts-preview", "gemini-2.5-flash-preview-tts"]
 # Chunk size in words. Split only on speaker-turn boundaries.
 chunk_target_words = 250
 chunk_max_words    = 320

@@ -133,10 +133,18 @@ def _build_prompt(entry: dict, cfg: dict) -> str:
     return "\n\n".join(lines)
 
 
+def model_for(episode_id: str, cfg: dict) -> str:
+    """The episode's own TTS model if it has one, else the configured default.
+    Pinned per episode so a config change mid-library cannot produce audio that
+    switches voice model partway through."""
+    ep = db.get_episode(episode_id)
+    return (ep["tts_model"] if ep and ep["tts_model"] else cfg["models"]["tts"])
+
+
 def _synthesize_chunk(episode_id: str, entry: dict, wav_path, cfg: dict) -> None:
     from google.genai import types
 
-    model = cfg["models"]["tts"]
+    model = model_for(episode_id, cfg)
     speech_config = types.SpeechConfig(
         multi_speaker_voice_config=types.MultiSpeakerVoiceConfig(
             speaker_voice_configs=[

@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS episode (
   episode_title TEXT,               -- LLM-written title for the episode itself
   venue         TEXT,
   source_url    TEXT,               -- link to the paper, when it is public
+  tts_model     TEXT,               -- overrides config for this episode
   status        TEXT NOT NULL,      -- queued|extracting|scripting|synthesizing|assembling|done|failed
   script_md     TEXT,
   audio_path    TEXT,
@@ -84,7 +85,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
     """Additive column migrations, so an existing library survives an upgrade."""
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(episode)")}
     for name, decl in (("summary", "TEXT"), ("episode_title", "TEXT"),
-                       ("cost_json", "TEXT"), ("source_url", "TEXT"),
+                       ("cost_json", "TEXT"), ("source_url", "TEXT"), ("tts_model", "TEXT"),
                        ("published", "INTEGER DEFAULT 0"),
                        ("flags_reviewed", "INTEGER DEFAULT 0")):
         if name not in cols:

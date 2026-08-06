@@ -356,6 +356,9 @@ def _episode_view(row) -> dict:
         "attrib_credit": _author_credit(authors),
         "attrib_stop": "" if _author_credit(authors).endswith(".") else ".",
         "source_url": safe_url(row["source_url"]),
+        "tts_model": row["tts_model"] or CFG["models"]["tts"],
+        "tts_model_pinned": bool(row["tts_model"]),
+        "script_md_present": bool(row["script_md"]),
         "summary": _blurb(row),
         "authors": authors,
         "year": row["year"],
@@ -534,6 +537,73 @@ def set_published(request: Request, episode_id: str,
     return RedirectResponse(f"/episode/{episode_id}", status_code=303)
 
 
+def tts_choices() -> list[str]:
+    """Models offered in the picker. Always includes the configured default so
+    the list can never be empty."""
+    listed = CFG.get("tts", {}).get("models") or []
+    default = CFG["models"]["tts"]
+    return list(dict.fromkeys([*listed, default]))
+
+
+@app.get("/admin/models", response_class=HTMLResponse)
+def admin_models(request: Request):
+    """What this API key can actually call. Hardcoded model IDs go stale and a
+    wrong one 404s every chunk of an episode, so ask the API instead."""
+    if not auth.is_admin(request):
+        return RedirectResponse("/admin/login", status_code=303)
+    try:
+        from pipeline.gemini import client
+
+        models = [
+            {"name": m.name.removeprefix("models/"),
+             "display": m.display_name or "",
+             "actions": ", ".join(m.supported_actions or [])}
+            for m in client().models.list()
+        ]
+        models.sort(key=lambda m: m["name"])
+        error = ""
+    except Exception as e:
+        models, error = [], str(e)
+
+    return templates.TemplateResponse(
+        request, "models.html",
+        {"admin": True, "signed_in": True, "models": models, "error": error,
+         "configured": CFG["models"], "choices": tts_choices()},
+    )
+
+
+@app.post("/episode/{episode_id}/clone")
+def clone_episode(request: Request, episode_id: str, tts_model: str = Form("")):
+    """Copy an episode's script onto a new episode with a different TTS model.
+
+    Comparing two voice models needs the same words in both, so this reuses the
+    script rather than regenerating it — the audio is the only variable, and the
+    only thing paid for again."""
+    require_admin(request)
+    src = db.get_episode(episode_id)
+    if not src:
+        raise HTTPException(404, "no such episode")
+    if not src["script_md"]:
+        raise HTTPException(400, "nothing to clone: this episode has no script yet")
+    if tts_model not in tts_choices():
+        raise HTTPException(400, f"unknown TTS model {tts_model!r}")
+
+    new_id = db.new_ulid()
+    db.create_episode(new_id, src["source_path"], src["sha256"], status="queued")
+    shutil.copy2(PAPERS_DIR / f"{episode_id}.pdf", PAPERS_DIR / f"{new_id}.pdf")
+    db.update_episode(
+        new_id,
+        title=src["title"], authors=src["authors"], year=src["year"],
+        abstract=src["abstract"], venue=src["venue"], summary=src["summary"],
+        episode_title=src["episode_title"], source_url=src["source_url"],
+        script_md=src["script_md"], flags_reviewed=src["flags_reviewed"],
+        tts_model=tts_model, status="queued",
+    )
+    WORK_Q.put((new_id, "synthesizing"))
+    log.info("cloned %s to %s for TTS model %s", episode_id, new_id, tts_model)
+    return RedirectResponse(f"/episode/{new_id}?queued=1", status_code=303)
+
+
 @app.get("/terms", response_class=HTMLResponse)
 def terms(request: Request):
     site = CFG.get("site", {})
@@ -574,6 +644,7 @@ def _render_library(request: Request, admin_mode: bool, error: str = ""):
             "failed": failed,
             "admin": admin_mode,
             "signed_in": auth.is_admin(request),
+            "tts_choices": tts_choices(),
             "queue": [e for e in all_episodes if e["status"] in run.STAGE_NAMES
                       or e["status"] == "queued"],
             "error": error,
@@ -586,10 +657,12 @@ def _render_library(request: Request, admin_mode: bool, error: str = ""):
 
 
 @app.post("/upload")
-async def upload(request: Request, file: UploadFile):
+async def upload(request: Request, file: UploadFile, tts_model: str = Form("")):
     require_admin(request)
     if not (file.filename or "").lower().endswith(".pdf"):
         raise HTTPException(400, "only .pdf files are accepted")
+    if tts_model and tts_model not in tts_choices():
+        raise HTTPException(400, f"unknown TTS model {tts_model!r}")
     staged = INBOX_DIR / f"upload-{db.new_ulid()}.pdf"
     with open(staged, "wb") as out:
         shutil.copyfileobj(file.file, out)
@@ -603,6 +676,8 @@ async def upload(request: Request, file: UploadFile):
     except PipelineError as e:
         _move_to_processed(staged)
         return RedirectResponse(f"/admin?error={quote(str(e))}", status_code=303)
+    if tts_model:
+        db.update_episode(episode_id, tts_model=tts_model)
     return RedirectResponse(f"/episode/{episode_id}?queued=1", status_code=303)
 
 
@@ -632,6 +707,7 @@ def episode_page(request: Request, episode_id: str):
             "stages": stages,
             "retry_stages": run.STAGE_NAMES,
             "publish_blocker": publish_blocker(row) if admin_mode else None,
+            "tts_choices": tts_choices(),
         },
     )
 

@@ -7,6 +7,7 @@ real, so these cover acceptance criteria 1, 2, 3, 5 and 6.
 
 import json
 import math
+import queue
 import shutil
 import struct
 import subprocess
@@ -78,6 +79,15 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.db")
     db._local.__dict__.clear()
     db.init_db()
+
+    # WORK_Q is module-level and outlives a test; a leftover entry makes the
+    # next test's queue assertions read someone else's episode.
+    import app as app_mod
+    while not app_mod.WORK_Q.empty():
+        try:
+            app_mod.WORK_Q.get_nowait()
+        except queue.Empty:
+            break
 
     monkeypatch.setattr(ingest, "PAPERS_DIR", papers)
     monkeypatch.setattr(script_mod, "PAPERS_DIR", papers)
@@ -1460,3 +1470,136 @@ def test_feed_includes_the_source_paper_link(public_client, env, tmp_path):
 
     root = ET.fromstring(public_client.get("/feed.xml").content)
     assert "https://example.org/paper.pdf" in root.find("channel/item/description").text
+
+
+# --------------------------------------------------- per-episode TTS model
+
+def test_upload_pins_the_chosen_tts_model(public_client, env, tmp_path, monkeypatch):
+    import db
+
+    import app as app_mod
+    monkeypatch.setattr(app_mod, "tts_choices",
+                        lambda: ["model-a", "model-b"])
+    public_client.post("/admin/login", data={"password": "hunter2"})
+
+    pdf = tmp_path / "paper.pdf"
+    _make_pdf(pdf)
+    resp = public_client.post(
+        "/upload",
+        files={"file": ("paper.pdf", pdf.read_bytes(), "application/pdf")},
+        data={"tts_model": "model-b"}, follow_redirects=False,
+    )
+    eid = resp.headers["location"].split("/")[2].split("?")[0]
+    assert db.get_episode(eid)["tts_model"] == "model-b"
+
+
+def test_upload_rejects_an_unlisted_model(public_client, env, tmp_path, monkeypatch):
+    import app as app_mod
+    monkeypatch.setattr(app_mod, "tts_choices", lambda: ["model-a"])
+    public_client.post("/admin/login", data={"password": "hunter2"})
+
+    pdf = tmp_path / "paper.pdf"
+    _make_pdf(pdf)
+    resp = public_client.post(
+        "/upload", files={"file": ("paper.pdf", pdf.read_bytes(), "application/pdf")},
+        data={"tts_model": "gemini-does-not-exist"},
+    )
+    assert resp.status_code == 400
+
+
+def test_synthesis_uses_the_episodes_model_not_the_config(env, tmp_path):
+    """A config change mid-library must not switch voice model partway through
+    an episode already part-synthesized."""
+    import db
+    from pipeline import ingest, tts
+
+    pdf = tmp_path / "paper.pdf"
+    _make_pdf(pdf)
+    eid = ingest.ingest_pdf(pdf, env["cfg"])
+
+    assert tts.model_for(eid, env["cfg"]) == "t", "falls back to config"
+    db.update_episode(eid, tts_model="pinned-model")
+    assert tts.model_for(eid, env["cfg"]) == "pinned-model"
+
+
+@pytest.mark.skipif(not HAS_FFMPEG, reason="ffmpeg required")
+def test_clone_reuses_the_script_with_a_different_model(public_client, env, tmp_path, monkeypatch):
+    """Comparing voice models needs identical words in both episodes."""
+    import db
+    from pipeline import ingest, run
+
+    import app as app_mod
+    monkeypatch.setattr(app_mod, "tts_choices", lambda: ["model-a", "model-b"])
+    monkeypatch.setattr(app_mod, "PAPERS_DIR", env["papers"])
+    public_client.post("/admin/login", data={"password": "hunter2"})
+
+    pdf = tmp_path / "paper.pdf"
+    _make_pdf(pdf)
+    src = ingest.ingest_pdf(pdf, env["cfg"])
+    run.run_episode(src, env["cfg"])
+    db.update_episode(src, source_url="https://example.org/p.pdf")
+
+    resp = public_client.post(f"/episode/{src}/clone", data={"tts_model": "model-b"},
+                              follow_redirects=False)
+    assert resp.status_code == 303
+    new_id = resp.headers["location"].split("/")[2].split("?")[0]
+    assert new_id != src
+
+    original, clone = db.get_episode(src), db.get_episode(new_id)
+    assert clone["script_md"] == original["script_md"], "same words, or it is not a comparison"
+    assert clone["title"] == original["title"]
+    assert clone["source_url"] == original["source_url"]
+    assert clone["tts_model"] == "model-b"
+    assert original["tts_model"] is None, "the source is left alone"
+    assert (env["papers"] / f"{new_id}.pdf").exists(), "PDF copied for flag checking"
+    assert app_mod.WORK_Q.get_nowait() == (new_id, "synthesizing"), "skips scripting"
+
+
+def test_clone_refuses_without_a_script(public_client, env, tmp_path, monkeypatch):
+    import app as app_mod
+    monkeypatch.setattr(app_mod, "tts_choices", lambda: ["model-a", "model-b"])
+    public_client.post("/admin/login", data={"password": "hunter2"})
+    eid = _episode(env, tmp_path, title="No Script Yet", status="queued")
+
+    resp = public_client.post(f"/episode/{eid}/clone", data={"tts_model": "model-b"})
+    assert resp.status_code == 400
+    assert "no script" in resp.text
+
+
+def test_clone_is_admin_only(public_client, env, tmp_path):
+    eid = _episode(env, tmp_path, title="T", status="done", script_md="HOST_A: Hi.")
+    assert public_client.post(f"/episode/{eid}/clone",
+                              data={"tts_model": "model-b"}).status_code == 401
+
+
+def test_tts_choices_always_include_the_configured_default(monkeypatch):
+    import app as app_mod
+
+    monkeypatch.setitem(app_mod.CFG, "tts", {"models": ["extra-model"]})
+    monkeypatch.setitem(app_mod.CFG, "models", {**app_mod.CFG["models"], "tts": "default-model"})
+    assert app_mod.tts_choices() == ["extra-model", "default-model"]
+
+    monkeypatch.setitem(app_mod.CFG, "tts", {})
+    assert app_mod.tts_choices() == ["default-model"], "never empty"
+
+
+def test_models_page_lists_what_the_key_offers(public_client, monkeypatch):
+    import pipeline.gemini as g
+
+    class FakeModel:
+        def __init__(self, n): self.name, self.display_name, self.supported_actions = n, "", ["generateContent"]
+
+    monkeypatch.setattr(g, "client", lambda: type("C", (), {
+        "models": type("M", (), {"list": staticmethod(
+            lambda: [FakeModel("models/gemini-3.1-flash-tts-preview"),
+                     FakeModel("models/gemini-3-flash-preview")])})()})())
+    public_client.post("/admin/login", data={"password": "hunter2"})
+
+    html = public_client.get("/admin/models").text
+    assert "gemini-3.1-flash-tts-preview" in html
+    assert "gemini-3-flash-preview" in html
+
+
+def test_models_page_is_admin_only(public_client):
+    resp = public_client.get("/admin/models", follow_redirects=False)
+    assert resp.status_code == 303

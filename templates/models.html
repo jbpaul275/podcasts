@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Available models — Paperpod{% endblock %}
+{% block content %}
+
+<h1>Available models</h1>
+<p class="muted">What this API key can actually call, straight from the API. Hardcoded
+  IDs go stale, and a wrong one 404s every chunk of an episode.</p>
+
+{% if error %}
+  <p class="error flash">Could not list models: {{ error }}</p>
+{% endif %}
+
+<h2>In use</h2>
+<table class="modeltable">
+  {% for stage, name in configured.items() %}
+    <tr><td>{{ stage }}</td><td><code>{{ name }}</code></td></tr>
+  {% endfor %}
+</table>
+
+<h2>Offered in the upload picker</h2>
+<ul class="plain">{% for c in choices %}<li><code>{{ c }}</code></li>{% endfor %}</ul>
+<p class="muted">Edit <code>[tts] models</code> in config.toml to change this list.</p>
+
+{% if models %}
+  <h2>{{ models|length }} models on this key</h2>
+  <table class="modeltable">
+    <tr><th>Model</th><th>Supports</th></tr>
+    {% for m in models %}
+      <tr class="{{ 'tts' if 'tts' in m.name|lower }}">
+        <td><code>{{ m.name }}</code>{% if m.display %}<br><span class="muted">{{ m.display }}</span>{% endif %}</td>
+        <td class="muted">{{ m.actions }}</td>
+      </tr>
+    {% endfor %}
+  </table>
+{% endif %}
+
+{% endblock %}
