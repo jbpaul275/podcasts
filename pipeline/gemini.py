@@ -1,12 +1,22 @@
 """Shared Gemini client helpers: client construction, cost accounting, fence stripping."""
 
+import json
+import logging
 import os
 import re
+import time
 
 import db
-from . import PipelineError
+from . import PipelineError, QuotaUnavailable
+
+log = logging.getLogger("paperpod.gemini")
 
 _client = None
+
+# Transient by nature: rate limits, and the server-side failures Gemini returns
+# intermittently. Anything else (bad request, auth, unknown model) will fail the
+# same way on every attempt, so retrying only wastes wall-clock.
+RETRYABLE_CODES = {408, 429, 500, 502, 503, 504}
 
 
 def client():
@@ -17,6 +27,95 @@ def client():
         from google import genai
         _client = genai.Client()  # reads GEMINI_API_KEY
     return _client
+
+
+def _payload(exc) -> dict:
+    """The parsed error body, if the exception carries one."""
+    details = getattr(exc, "details", None)
+    if isinstance(details, dict):
+        inner = details.get("error")
+        return inner if isinstance(inner, dict) else details
+    return {}
+
+
+def retry_delay(exc) -> float | None:
+    """Seconds the server asked us to wait, from its RetryInfo.
+
+    This matters: Gemini answers a 429 with a specific delay (often 10-30s),
+    and blind exponential backoff of 2s/4s gives up long before that window
+    has passed, turning a recoverable rate limit into a failed episode.
+    """
+    for detail in _payload(exc).get("details") or []:
+        if isinstance(detail, dict) and str(detail.get("@type", "")).endswith("RetryInfo"):
+            m = re.match(r"([\d.]+)s?$", str(detail.get("retryDelay", "")).strip())
+            if m:
+                return float(m.group(1))
+    m = re.search(r"retry in ([\d.]+)\s*s", str(exc))
+    return float(m.group(1)) if m else None
+
+
+def quota_is_unavailable(exc) -> bool:
+    """A 429 carrying `limit: 0` means the plan grants no allowance for this
+    model at all. That is a billing state, not congestion, so no amount of
+    waiting will clear it."""
+    if getattr(exc, "code", None) != 429:
+        return False
+    try:
+        blob = json.dumps(_payload(exc))
+    except (TypeError, ValueError):
+        blob = str(exc)
+    return bool(re.search(r"limit:\s*0\b", blob + " " + str(exc)))
+
+
+def is_retryable(exc) -> bool:
+    code = getattr(exc, "code", None)
+    return isinstance(code, int) and code in RETRYABLE_CODES
+
+
+def call_with_retry(fn, cfg: dict, model: str, label: str = "request",
+                    extra_retryable: tuple = ()):
+    """Run a Gemini call, retrying transient failures on the server's schedule.
+
+    `extra_retryable` covers failures that arrive as a valid response rather
+    than an HTTP error — notably TTS returning text tokens instead of audio.
+    """
+    rcfg = cfg.get("retry", {})
+    attempts = max(1, int(rcfg.get("attempts", 4)))
+    base = float(rcfg.get("base_delay_s", 2))
+    max_delay = float(rcfg.get("max_delay_s", 60))
+
+    last: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            return fn()
+        except extra_retryable as e:
+            last = e
+            delay = base * (2 ** attempt)
+        except Exception as e:
+            last = e
+            if quota_is_unavailable(e):
+                raise QuotaUnavailable(
+                    f"{model} has no quota on this API key's plan (limit: 0). "
+                    "Retrying cannot help — enable billing on the project, or "
+                    "point [models] in config.toml at a model you have access to."
+                ) from e
+            if not is_retryable(e):
+                raise
+            # Prefer the server's own delay; it knows when the window reopens.
+            delay = retry_delay(e)
+            if delay is None:
+                delay = base * (2 ** attempt)
+
+        if attempt == attempts - 1:
+            break
+        delay = min(delay + 0.5, max_delay)  # small cushion past the stated window
+        log.warning(
+            "%s attempt %d/%d failed (%s); retrying in %.1fs",
+            label, attempt + 1, attempts, type(last).__name__, delay,
+        )
+        time.sleep(delay)
+
+    raise last if last else PipelineError(f"{label} failed for an unknown reason")
 
 
 def record_cost(episode_id: str, model: str, response, cfg: dict,

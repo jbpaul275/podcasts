@@ -4,8 +4,9 @@ Design constraints (from the Gemini speech-generation docs):
 - Multi-speaker supports at most two speakers.
 - Quality drifts on long generations, so the script is chunked to ~200-300
   words, splitting only on speaker-turn boundaries.
-- The model occasionally 500s or returns text tokens instead of audio: retry
-  with exponential backoff, three attempts, then fail just that chunk.
+- The model occasionally 500s, rate-limits, or returns text tokens instead of
+  audio. Those are retried on the server's own schedule (see gemini.py); a
+  chunk that still fails becomes a logged gap rather than sinking the episode.
 - Output is raw PCM (24 kHz, 16-bit, mono unless the response says otherwise);
   we wrap it in a WAV header.
 
@@ -17,19 +18,17 @@ and retrying resumes where it left off.
 import json
 import logging
 import re
-import time
 import wave
 
 import db
 from config import CHUNKS_DIR
-from . import PipelineError
-from .gemini import client, record_cost
+from . import NoAudioError, PipelineError, QuotaUnavailable
+from .gemini import call_with_retry, client, record_cost
 from .script import parse_turns
 
 log = logging.getLogger("paperpod.tts")
 
 DEFAULT_RATE = 24000
-MAX_ATTEMPTS = 3
 
 
 def chunk_turns(turns: list[tuple[str, str]], target_words: int, max_words: int) -> list[dict]:
@@ -96,8 +95,12 @@ def synthesize(episode_id: str, cfg: dict) -> None:
             continue
         try:
             _synthesize_chunk(episode_id, entry, wav_path, cfg)
+        except QuotaUnavailable:
+            # Every remaining chunk would fail identically; stop rather than
+            # grinding through the whole script to produce nothing.
+            raise
         except Exception as e:
-            log.error("chunk %03d failed after %d attempts: %s", seq, MAX_ATTEMPTS, e)
+            log.error("chunk %03d failed, giving up on it: %s", seq, e)
             failed.append(seq)
 
     if failed:
@@ -158,30 +161,25 @@ def _synthesize_chunk(episode_id: str, entry: dict, wav_path, cfg: dict) -> None
     )
     prompt = _build_prompt(entry, cfg)
 
-    last_err: Exception | None = None
-    for attempt in range(MAX_ATTEMPTS):
-        if attempt:
-            time.sleep(2 ** attempt)  # 2s, 4s
-        try:
-            resp = client().models.generate_content(
-                model=model,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_modalities=["AUDIO"],
-                    speech_config=speech_config,
-                ),
-            )
-            record_cost(episode_id, model, resp, cfg, stage="tts")
-            data, mime = _extract_audio(resp)
-            _write_wav(wav_path, data, mime)
-            return
-        except Exception as e:
-            last_err = e
-            log.warning(
-                "chunk %s attempt %d/%d failed: %s",
-                wav_path.name, attempt + 1, MAX_ATTEMPTS, e,
-            )
-    raise last_err if last_err else PipelineError("unknown TTS failure")
+    def once():
+        resp = client().models.generate_content(
+            model=model,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_modalities=["AUDIO"],
+                speech_config=speech_config,
+            ),
+        )
+        record_cost(episode_id, model, resp, cfg, stage="tts")
+        # Raises NoAudioError when the model answers with text tokens, which
+        # call_with_retry treats as retryable.
+        return _extract_audio(resp)
+
+    data, mime = call_with_retry(
+        once, cfg, model, label=f"tts chunk {wav_path.stem}",
+        extra_retryable=(NoAudioError,),
+    )
+    _write_wav(wav_path, data, mime)
 
 
 def _extract_audio(resp) -> tuple[bytes, str]:
@@ -196,7 +194,7 @@ def _extract_audio(resp) -> tuple[bytes, str]:
         if inline is not None and inline.data:
             return inline.data, (inline.mime_type or "")
     text = (getattr(resp, "text", None) or "")[:200]
-    raise PipelineError(f"model returned no audio (text instead: {text!r})")
+    raise NoAudioError(f"model returned no audio (text instead: {text!r})")
 
 
 def _write_wav(wav_path, data: bytes, mime: str) -> None:

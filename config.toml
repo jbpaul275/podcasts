@@ -18,6 +18,14 @@ chunk_max_words    = 320
 # How many preceding turns to include as (unspoken) context for prosody.
 context_turns      = 2
 
+[retry]
+# Transient API failures (429 rate limits, 5xx) are retried on the server's
+# own schedule when it supplies one -- Gemini's 429s often ask for 10-30s,
+# well past what plain exponential backoff would wait.
+attempts     = 4
+base_delay_s = 2
+max_delay_s  = 60
+
 [audio]
 seam_silence_ms = 250
 lufs_target     = -16.0

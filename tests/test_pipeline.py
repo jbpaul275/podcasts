@@ -193,6 +193,168 @@ def test_citation_flags_report_line_numbers():
     assert flags and all(f["line"] == 2 for f in flags)
 
 
+# ------------------------------------------------------------------ retry
+
+def _api_error(code, details):
+    from google.genai import errors
+    return errors.APIError(code, details)
+
+
+# The real body Gemini returned on a rate limit, trimmed to the parts we read.
+RATE_LIMITED = {
+    "error": {
+        "code": 429,
+        "message": "You exceeded your current quota. Please retry in 12.595337758s.",
+        "status": "RESOURCE_EXHAUSTED",
+        "details": [
+            {"@type": "type.googleapis.com/google.rpc.QuotaFailure",
+             "violations": [{"quotaMetric": "generate_content_free_tier_requests"}]},
+            {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "12s"},
+        ],
+    }
+}
+
+ZERO_QUOTA = {
+    "error": {
+        "code": 429,
+        "message": ("Quota exceeded for metric: generate_content_free_tier_requests, "
+                    "limit: 0, model: gemini-3.1-pro"),
+        "status": "RESOURCE_EXHAUSTED",
+        "details": [{"@type": "type.googleapis.com/google.rpc.RetryInfo",
+                     "retryDelay": "12s"}],
+    }
+}
+
+RETRY_CFG = {"retry": {"attempts": 3, "base_delay_s": 2, "max_delay_s": 60}}
+
+
+def test_retry_delay_read_from_server_response():
+    from pipeline.gemini import retry_delay
+
+    assert retry_delay(_api_error(429, RATE_LIMITED)) == 12.0
+
+
+def test_retry_delay_absent_when_not_supplied():
+    from pipeline.gemini import retry_delay
+
+    assert retry_delay(_api_error(500, {"error": {"code": 500, "message": "boom"}})) is None
+
+
+def test_rate_limit_is_retried_on_the_servers_schedule(monkeypatch):
+    """The bug: fixed 2s/4s backoff gave up before a 12s window reopened."""
+    from pipeline.gemini import call_with_retry
+
+    slept = []
+    monkeypatch.setattr("pipeline.gemini.time.sleep", slept.append)
+
+    calls = []
+
+    def flaky():
+        calls.append(1)
+        if len(calls) < 3:
+            raise _api_error(429, RATE_LIMITED)
+        return "audio"
+
+    assert call_with_retry(flaky, RETRY_CFG, "m", "chunk") == "audio"
+    assert len(calls) == 3
+    assert slept == [12.5, 12.5], "must wait the server's 12s, not 2s then 4s"
+
+
+def test_zero_quota_fails_immediately_with_actionable_message(monkeypatch):
+    from pipeline import QuotaUnavailable
+    from pipeline.gemini import call_with_retry
+
+    slept = []
+    monkeypatch.setattr("pipeline.gemini.time.sleep", slept.append)
+    calls = []
+
+    def always_zero():
+        calls.append(1)
+        raise _api_error(429, ZERO_QUOTA)
+
+    with pytest.raises(QuotaUnavailable, match="no quota"):
+        call_with_retry(always_zero, RETRY_CFG, "gemini-3.1-pro", "script")
+    assert calls == [1], "limit: 0 can never clear; do not retry"
+    assert slept == []
+
+
+def test_permanent_errors_are_not_retried(monkeypatch):
+    from pipeline.gemini import call_with_retry
+
+    monkeypatch.setattr("pipeline.gemini.time.sleep", lambda s: None)
+    calls = []
+
+    def bad_request():
+        calls.append(1)
+        raise _api_error(400, {"error": {"code": 400, "message": "bad model"}})
+
+    with pytest.raises(Exception):
+        call_with_retry(bad_request, RETRY_CFG, "m", "x")
+    assert calls == [1], "a 400 fails the same way every time"
+
+
+def test_server_errors_use_exponential_backoff(monkeypatch):
+    from pipeline.gemini import call_with_retry
+
+    slept = []
+    monkeypatch.setattr("pipeline.gemini.time.sleep", slept.append)
+
+    def always_500():
+        raise _api_error(503, {"error": {"code": 503, "message": "overloaded"}})
+
+    with pytest.raises(Exception):
+        call_with_retry(always_500, RETRY_CFG, "m", "x")
+    assert slept == [2.5, 4.5], "no server hint, so back off exponentially"
+
+
+def test_delay_is_capped(monkeypatch):
+    from pipeline.gemini import call_with_retry
+
+    slept = []
+    monkeypatch.setattr("pipeline.gemini.time.sleep", slept.append)
+    huge = {"error": {"code": 429, "message": "wait",
+                      "details": [{"@type": "type.googleapis.com/google.rpc.RetryInfo",
+                                   "retryDelay": "3600s"}]}}
+
+    def always():
+        raise _api_error(429, huge)
+
+    with pytest.raises(Exception):
+        call_with_retry(always, {"retry": {"attempts": 2, "max_delay_s": 30}}, "m", "x")
+    assert slept == [30], "an absurd server delay must not hang the worker"
+
+
+def test_text_instead_of_audio_is_retried(monkeypatch):
+    """TTS's own failure mode arrives as a valid response, not an HTTP error."""
+    from pipeline import NoAudioError
+    from pipeline.gemini import call_with_retry
+
+    monkeypatch.setattr("pipeline.gemini.time.sleep", lambda s: None)
+    calls = []
+
+    def flaky():
+        calls.append(1)
+        if len(calls) < 2:
+            raise NoAudioError("model returned no audio")
+        return (b"pcm", "audio/L16;rate=24000")
+
+    got = call_with_retry(flaky, RETRY_CFG, "m", "chunk", extra_retryable=(NoAudioError,))
+    assert got == (b"pcm", "audio/L16;rate=24000")
+    assert len(calls) == 2
+
+
+def test_retry_gives_up_and_reraises_the_last_error(monkeypatch):
+    from pipeline.gemini import call_with_retry
+
+    monkeypatch.setattr("pipeline.gemini.time.sleep", lambda s: None)
+
+    def always():
+        raise _api_error(429, RATE_LIMITED)
+
+    with pytest.raises(Exception, match="429"):
+        call_with_retry(always, RETRY_CFG, "m", "x")
+
+
 # ------------------------------------------------------------ WAV wrapping
 
 def test_write_wav_uses_rate_from_mime(tmp_path):

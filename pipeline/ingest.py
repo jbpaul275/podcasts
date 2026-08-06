@@ -18,7 +18,7 @@ import fitz  # pymupdf
 import db
 from config import PAPERS_DIR, load_prompt
 from . import PipelineError
-from .gemini import client, pdf_part, record_cost, strip_fences
+from .gemini import call_with_retry, client, pdf_part, record_cost, strip_fences
 
 log = logging.getLogger("paperpod.ingest")
 
@@ -77,10 +77,13 @@ def extract_metadata(episode_id: str, cfg: dict) -> None:
     from google.genai import types
 
     model = cfg["models"]["metadata"]
-    resp = client().models.generate_content(
-        model=model,
-        contents=[pdf_part(pdf_path), load_prompt("metadata.md")],
-        config=types.GenerateContentConfig(response_mime_type="application/json"),
+    resp = call_with_retry(
+        lambda: client().models.generate_content(
+            model=model,
+            contents=[pdf_part(pdf_path), load_prompt("metadata.md")],
+            config=types.GenerateContentConfig(response_mime_type="application/json"),
+        ),
+        cfg, model, label="metadata extraction",
     )
     record_cost(episode_id, model, resp, cfg, stage="metadata")
 

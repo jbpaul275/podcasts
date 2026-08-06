@@ -20,6 +20,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 HAS_FFMPEG = shutil.which("ffmpeg") is not None and shutil.which("ffprobe") is not None
 
+# Captured before any test monkeypatches it onto the module.
+from pipeline import tts as _tts_module  # noqa: E402
+
+_ORIGINAL_SYNTH_CHUNK = _tts_module._synthesize_chunk
+
 SAMPLE_SCRIPT = "\n".join([
     "HOST_A: Here's a question worth caring about: does raising the minimum wage cost people jobs?",
     "HOST_B: " + " ".join(["Everyone assumed it did, and the theory is clean."] * 12),
@@ -344,6 +349,71 @@ def test_resume_after_mid_tts_crash_does_not_regenerate_script(env, tmp_path):
         assert (env["chunks"] / episode_id / name).read_bytes() == data, (
             f"chunk {name} was regenerated instead of reused"
         )
+
+
+def test_zero_quota_aborts_instead_of_gapping_every_chunk(env, tmp_path):
+    """A plan with no allowance fails identically on every chunk, so the run
+    must stop with an actionable message rather than emit an empty episode."""
+    import db
+    from pipeline import QuotaUnavailable, ingest, run, tts
+
+    pdf = tmp_path / "paper.pdf"
+    _make_pdf(pdf)
+    episode_id = ingest.ingest_pdf(pdf, env["cfg"])
+
+    attempts = []
+
+    def no_quota(eid, entry, wav_path, cfg):
+        attempts.append(entry["seq"])
+        raise QuotaUnavailable("gemini-3.1-flash-tts-preview has no quota on this plan")
+
+    tts._synthesize_chunk = no_quota
+    try:
+        run.run_episode(episode_id, env["cfg"])
+    finally:
+        tts._synthesize_chunk = _ORIGINAL_SYNTH_CHUNK
+
+    row = db.get_episode(episode_id)
+    assert row["status"] == "failed"
+    assert "no quota" in row["error"]
+    assert attempts == [0], "must stop after the first chunk, not try them all"
+    assert not (env["final"] / f"{episode_id}.mp3").exists()
+
+
+def test_rate_limited_stage_recovers_instead_of_failing(env, tmp_path, monkeypatch):
+    """A 429 during scripting used to kill the episode outright."""
+    import db
+    from google.genai import errors
+
+    from pipeline import ingest, run, script as script_mod
+    from pipeline.gemini import call_with_retry
+
+    monkeypatch.setattr("pipeline.gemini.time.sleep", lambda s: None)
+
+    pdf = tmp_path / "paper.pdf"
+    _make_pdf(pdf)
+    episode_id = ingest.ingest_pdf(pdf, env["cfg"])
+
+    calls = []
+    body = {"error": {"code": 429, "message": "slow down",
+                      "details": [{"@type": "type.googleapis.com/google.rpc.RetryInfo",
+                                   "retryDelay": "12s"}]}}
+
+    def flaky_script(eid, cfg):
+        def once():
+            calls.append(1)
+            if len(calls) < 2:
+                raise errors.APIError(429, body)
+            return SAMPLE_SCRIPT
+        return call_with_retry(once, cfg, "m", "script")
+
+    monkeypatch.setattr(script_mod, "generate_script", flaky_script)
+    monkeypatch.setattr(script_mod, "generate_title", lambda *a, **k: "A Title")
+    run.run_episode(episode_id, env["cfg"], from_stage="scripting")
+
+    row = db.get_episode(episode_id)
+    assert row["status"] == "done", row["error"]
+    assert len(calls) == 2, "the rate limit was ridden out, not surfaced"
 
 
 def test_cost_is_accumulated_and_visible(env, tmp_path):

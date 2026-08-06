@@ -10,7 +10,7 @@ import re
 import db
 from config import PAPERS_DIR, load_prompt
 from . import PipelineError
-from .gemini import client, pdf_part, record_cost, strip_fences
+from .gemini import call_with_retry, client, pdf_part, record_cost, strip_fences
 
 log = logging.getLogger("paperpod.script")
 
@@ -93,8 +93,11 @@ def generate_script(episode_id: str, cfg: dict) -> str:
     gen_cfg = types.GenerateContentConfig(system_instruction=system)
     part = pdf_part(pdf_path)
 
-    resp = client().models.generate_content(
-        model=model, contents=[part, user], config=gen_cfg
+    resp = call_with_retry(
+        lambda: client().models.generate_content(
+            model=model, contents=[part, user], config=gen_cfg
+        ),
+        cfg, model, label="script generation",
     )
     record_cost(episode_id, model, resp, cfg, stage="script")
     script = _clean(resp.text or "")
@@ -109,8 +112,11 @@ def generate_script(episode_id: str, cfg: dict) -> str:
             + "\n".join(f"  {v!r}" for v in violations[:10])
             + "\nRegenerate the full script in the correct format."
         )
-        resp = client().models.generate_content(
-            model=model, contents=[part, retry_msg], config=gen_cfg
+        resp = call_with_retry(
+            lambda: client().models.generate_content(
+                model=model, contents=[part, retry_msg], config=gen_cfg
+            ),
+            cfg, model, label="script regeneration",
         )
         record_cost(episode_id, model, resp, cfg, stage="script")
         script = _clean(resp.text or "")
@@ -133,10 +139,13 @@ def generate_title(episode_id: str, script: str, cfg: dict) -> str | None:
 
     model = cfg["models"]["metadata"]  # a short, cheap call
     try:
-        resp = client().models.generate_content(
-            model=model,
-            contents=load_prompt("episode_title.md") + script,
-            config=types.GenerateContentConfig(max_output_tokens=8000),
+        resp = call_with_retry(
+            lambda: client().models.generate_content(
+                model=model,
+                contents=load_prompt("episode_title.md") + script,
+                config=types.GenerateContentConfig(max_output_tokens=8000),
+            ),
+            cfg, model, label="episode title",
         )
         record_cost(episode_id, model, resp, cfg, stage="title")
     except Exception as e:
