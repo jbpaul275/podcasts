@@ -293,3 +293,12 @@ ul.plain { list-style: none; padding: 0; margin: 0 0 0.5rem; }
 .versions tr:last-child td { border-bottom: none; }
 .versions tr.current td { font-weight: 600; }
 .versions .num { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* grounding sources */
+.sources { border-left: 3px solid var(--a); background: var(--card); padding: 0.85rem 1rem;
+  margin-top: 1.5rem; border-radius: 0 8px 8px 0; }
+.sources summary { cursor: pointer; font-size: 0.9rem; }
+.sources ul { margin: 0.6rem 0 0; padding-left: 1.1rem; }
+.sources li { margin-bottom: 0.35rem; font-size: 0.88rem; line-height: 1.45; }
+.sources li .muted { display: block; font-size: 0.78rem; }
+.sources .queries { margin-top: 0.8rem; font-size: 0.8rem; line-height: 1.6; }

@@ -27,6 +27,8 @@ CREATE TABLE IF NOT EXISTS episode (
   source_url    TEXT,               -- link to the paper, when it is public
   tts_model     TEXT,               -- overrides config for this episode
   audio_built_at TEXT,              -- when this audio was assembled
+  script_model  TEXT,               -- model that actually wrote the script
+  grounding_json TEXT,              -- {queries: [], sources: [{title,uri,domain}]}
   status        TEXT NOT NULL,      -- queued|extracting|scripting|synthesizing|assembling|done|failed
   script_md     TEXT,
   audio_path    TEXT,
@@ -86,7 +88,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
     """Additive column migrations, so an existing library survives an upgrade."""
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(episode)")}
     for name, decl in (("summary", "TEXT"), ("episode_title", "TEXT"),
-                       ("cost_json", "TEXT"), ("source_url", "TEXT"), ("tts_model", "TEXT"), ("audio_built_at", "TEXT"),
+                       ("cost_json", "TEXT"), ("source_url", "TEXT"), ("tts_model", "TEXT"), ("audio_built_at", "TEXT"), ("script_model", "TEXT"),
+                       ("grounding_json", "TEXT"),
                        ("published", "INTEGER DEFAULT 0"),
                        ("flags_reviewed", "INTEGER DEFAULT 0")):
         if name not in cols:
@@ -183,6 +186,15 @@ def add_cost(id: str, usd: float, stage: str = "other") -> None:
         (usd, json.dumps(breakdown), id),
     )
     conn.commit()
+
+
+def grounding(row: sqlite3.Row) -> dict:
+    """Web sources the script model consulted, if grounding was on."""
+    try:
+        data = json.loads(row["grounding_json"]) if row["grounding_json"] else {}
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def cost_breakdown(row: sqlite3.Row) -> dict[str, float]:

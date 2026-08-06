@@ -11,6 +11,22 @@ host_b = "Kore"
 target_words = 1600
 max_pages    = 120
 
+# How hard the model reasons before writing. Dense papers reward more of it,
+# and scripting is ~2% of an episode's cost, so this is cheap to raise.
+# One of: MINIMAL, LOW, MEDIUM, HIGH. Leave empty for the model's default.
+thinking_level = "HIGH"
+
+# Let the script model search the web while writing. Off by default: the
+# citation safeguards assume every claim comes from the PDF, and grounding
+# deliberately relaxes that (see prompts/script_grounding.md). When on, the
+# sources it used are recorded and shown on the episode.
+grounding = false
+
+# If the script model has no quota (a preview Pro often returns limit: 0),
+# fall back to this rather than failing the episode. Empty disables the
+# fallback. The substitution is recorded in the stage log.
+fallback_model = "gemini-3-flash-preview"
+
 [tts]
 # Models offered in the upload picker, first one the default. Verify IDs
 # against /admin/models before adding — a wrong ID 404s every chunk.

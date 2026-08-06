@@ -707,3 +707,130 @@ def test_unpriced_model_warns_rather_than_reporting_zero(caplog, monkeypatch):
     with caplog.at_level("WARNING"):
         gemini.record_cost("EP1", "unpriced-model", Resp(), {"costs": {}}, "tts")
     assert "reported as $0.00" not in caplog.text, "warns once per model, not per chunk"
+
+
+# --------------------------------------------- script quality: thinking etc
+
+def test_thinking_level_is_passed_through():
+    from pipeline.script import _script_config
+
+    cfg = {"script": {"thinking_level": "high"}}
+    gen = _script_config(cfg, "sys")
+    assert gen.thinking_config is not None
+    assert str(gen.thinking_config.thinking_level).upper().endswith("HIGH")
+    assert gen.tools is None, "grounding stays off unless asked for"
+
+
+def test_no_thinking_config_when_unset():
+    from pipeline.script import _script_config
+
+    assert _script_config({"script": {}}, "sys").thinking_config is None
+    assert _script_config({"script": {"thinking_level": ""}}, "sys").thinking_config is None
+
+
+def test_grounding_adds_the_search_tool():
+    from pipeline.script import _script_config
+
+    gen = _script_config({"script": {"grounding": True}}, "sys")
+    assert gen.tools and gen.tools[0].google_search is not None
+
+
+def test_fallback_model_ordering():
+    from pipeline.script import _script_models
+
+    assert _script_models({"models": {"script": "pro"},
+                           "script": {"fallback_model": "flash"}}) == ["pro", "flash"]
+    assert _script_models({"models": {"script": "pro"}, "script": {}}) == ["pro"]
+    # A fallback identical to the primary is not a fallback.
+    assert _script_models({"models": {"script": "pro"},
+                           "script": {"fallback_model": "pro"}}) == ["pro"]
+
+
+def test_collect_grounding_reads_sources_and_queries():
+    from pipeline.script import collect_grounding
+
+    class Web:
+        def __init__(s, t, u, d): s.title, s.uri, s.domain = t, u, d
+
+    class Chunk:
+        def __init__(s, w): s.web = w
+
+    class Meta:
+        web_search_queries = ["minimum wage employment elasticity"]
+        grounding_chunks = [
+            Chunk(Web("Card and Krueger 1994", "https://nber.org/w4509", "nber.org")),
+            Chunk(Web("Card and Krueger 1994", "https://nber.org/w4509", "nber.org")),
+            Chunk(None),
+        ]
+
+    class Resp:
+        candidates = [type("C", (), {"grounding_metadata": Meta()})()]
+
+    got = collect_grounding(Resp())
+    assert got["queries"] == ["minimum wage employment elasticity"]
+    assert len(got["sources"]) == 1, "duplicate sources collapse"
+    assert got["sources"][0]["uri"] == "https://nber.org/w4509"
+
+
+def test_collect_grounding_empty_without_metadata():
+    from pipeline.script import collect_grounding
+
+    class Resp:
+        candidates = []
+
+    assert collect_grounding(Resp()) == {"queries": [], "sources": []}
+
+
+def test_grounded_citation_counts_as_corroborated():
+    """With search on, a real citation absent from the PDF is legitimate — but
+    only if the model actually consulted a page supporting it."""
+    from pipeline.script import citation_flags
+
+    script = ("HOST_A: Card and Krueger (1994) found the opposite.\n"
+              "HOST_B: And Ghostwriter (2011) supposedly agreed.")
+    paper = "This paper studies minimum wages. No prior work is named here."
+    web = "Card and Krueger 1994 Minimum Wages and Employment nber.org"
+
+    flags = {f["text"]: f for f in citation_flags(script, paper, web)}
+    ck = flags["Card and Krueger (1994)"]
+    assert ck["in_paper"] is True and ck["source"] == "web"
+    fake = flags["Ghostwriter (2011)"]
+    assert fake["in_paper"] is False and fake["source"] is None, (
+        "grounding must not turn the flag check off — an invented cite still flags"
+    )
+
+
+def test_paper_beats_web_as_the_recorded_source():
+    from pipeline.script import citation_flags
+
+    flags = citation_flags("HOST_A: See Angrist (2009).",
+                           "We follow Angrist (2009) closely.",
+                           "Angrist 2009 something else")
+    assert flags[0]["source"] == "paper"
+
+
+def test_corroboration_survives_real_shaped_grounding_data():
+    """Grounding sources are titled after the paper, not its authors, so
+    "Card and Krueger (1994)" never appears verbatim in them — matching has to
+    work on the names, or every genuine citation flags as invented."""
+    from pipeline.script import citation_flags
+
+    script = ("HOST_A: The classic reference is Card and Krueger (1994).\n"
+              "HOST_B: And Ghostwriter (2011) supposedly showed the reverse.")
+    paper = "We study the imperial examination system. No prior work is named."
+    web = ("Minimum Wages and Employment: A Case Study nber.org "
+           "Card Krueger 1994 minimum wage")
+
+    flags = {f["text"]: f for f in citation_flags(script, paper, web)}
+    assert flags["Card and Krueger (1994)"]["source"] == "web"
+    assert flags["Ghostwriter (2011)"]["in_paper"] is False
+
+
+def test_name_token_matching_does_not_verify_an_invented_name():
+    from pipeline.script import _normalize, appears_in_paper
+
+    corpus = _normalize("Card Krueger 1994 minimum wage employment")
+    assert appears_in_paper("Card and Krueger (1994)", corpus)
+    assert not appears_in_paper("Card and Fabricated (1994)", corpus), (
+        "one real surname must not vouch for an invented co-author"
+    )

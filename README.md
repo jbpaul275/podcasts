@@ -41,7 +41,23 @@ The episode page shows the player, the full script with per-speaker styling, the
 
 The script prompt forbids fabricated citations, but models fabricate anyway. After generation, the script is regex-scanned for citation-shaped strings — `Name (Year)`, `et al.`, and proper nouns sitting near a bare four-digit year — and every hit is surfaced on the episode page, both as a summary box and inline on the offending line.
 
-These are **flags, not failures**. Most hits are innocent ("the Mariel boatlift in 1980"). The point is to put anything that *could* be an invented citation in front of a person before you publish it to your own ears. Check each against the paper.
+Each hit is checked against the extracted text of the source PDF. Names that trace back are collapsed into a secondary list; names that do not are shown prominently, because those are the fabrications.
+
+These are **flags, not failures**. Most hits are innocent ("the Mariel boatlift in 1980"). The point is to put anything that *could* be an invented citation in front of a person before publishing it.
+
+### Web grounding
+
+`[script] grounding` lets the script model search while writing. It is off by default, because it deliberately relaxes the rule the citation check depends on: without it, every claim must come from the PDF, and anything else is a suspected fabrication.
+
+With it on:
+
+- The model may name outside work, but only where a search supports it (`prompts/script_grounding.md` states the terms).
+- The queries it ran and the pages it used are recorded and shown on the episode.
+- A citation absent from the PDF but corroborated by a consulted source counts as traced, not invented. One that matches neither still flags.
+
+Matching is on names rather than whole phrases, because a grounding source is titled after the paper rather than its authors — "Card and Krueger (1994)" never appears verbatim in a source called *Minimum Wages and Employment*, but both surnames do.
+
+Search grounding bills per request on top of tokens, unlike the other script knobs.
 
 ## Listening on a phone
 
@@ -65,7 +81,11 @@ All knobs live in `config.toml`, loaded once at startup.
 
 - `[models]` — model IDs for metadata extraction, scripting, and TTS.
 - `[voices]` — the two prebuilt voice IDs. Two speakers is the documented maximum; do not add a third host.
-- `[script]` — `target_words` (1600 ≈ ten minutes) and `max_pages` rejection threshold.
+- `[script]` — the content-quality knobs:
+  - `target_words` (1600 ≈ ten minutes) and the `max_pages` rejection threshold.
+  - `thinking_level` — `MINIMAL`/`LOW`/`MEDIUM`/`HIGH`. How hard the model reasons before writing. Scripting is ~2% of an episode's cost, so this is cheap to raise and it is what dense technical papers reward.
+  - `grounding` — let the script model search the web. Off by default; see below.
+  - `fallback_model` — used if the script model has no quota, rather than failing the episode. The substitution is recorded in the stage log and shown on the episode.
 - `[audio]` — `seam_silence_ms` is the main quality tell. It ships at 250ms; try 150 and 400 and pick by ear.
 - `[server]` — `base_url` (see Tailscale above) and `port`.
 - `[costs]` — per-model token prices used to compute the per-episode cost shown in the UI.
@@ -78,7 +98,7 @@ Prompts live in `prompts/` as plain Markdown, loaded at call time rather than ba
 python -m pytest tests/ -q
 ```
 
-44 tests. Only the three Gemini calls are stubbed; ffmpeg assembly, loudness normalization, MP3 encoding, HTTP range serving, and RSS generation all run for real. Tests requiring ffmpeg skip cleanly if it is not installed.
+150 tests. Only the Gemini calls are stubbed; ffmpeg assembly, loudness normalization, MP3 encoding, HTTP range serving, and RSS generation all run for real. Tests requiring ffmpeg skip cleanly if it is not installed.
 
 ## Model IDs and the upstream docs
 
@@ -106,7 +126,7 @@ Visit `/admin/models` to see what your key can actually call — hardcoded IDs g
 
 The prices in `[costs]` for the two 2.5 TTS models are estimates. **Every model in the picker needs a `[costs]` entry**, or its spend is reported as $0.00; the app logs a warning at startup for any that are missing.
 
-The prices in `[costs]` are documented for TTS and **estimates for the two text models** — correct them against current Gemini pricing so the per-episode cost figure means something.
+The two text-model prices in `[costs]` are still estimates — correct them against current Gemini pricing so the per-episode figure means something.
 
 ## Layout
 
