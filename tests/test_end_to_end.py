@@ -1015,6 +1015,65 @@ def test_admin_can_edit_title_and_summary(public_client, env, tmp_path):
     assert "Machine title" not in public
 
 
+def test_admin_can_correct_the_attribution(public_client, env, tmp_path):
+    """Paper title and authors are model-extracted and public, so an error
+    here misnames a real person."""
+    import db
+
+    public_client.post("/admin/login", data={"password": "hunter2"})
+    eid = _episode(env, tmp_path, title="MISREAD TITLE", status="done", published=1,
+                   authors=json.dumps(["Wrong Name"]), year=1999,
+                   episode_title="Ep", summary="S.")
+
+    public_client.post(f"/episode/{eid}/edit", data={
+        "episode_title": "Ep", "summary": "S.",
+        "paper_title": "Ambiguous Attribution: Theory and Evidence",
+        "authors": "Ricardo Alonso,  Monica Martinez-Bravo , Carlos Sanz",
+        "year": "2026",
+    })
+
+    row = db.get_episode(eid)
+    assert row["title"] == "Ambiguous Attribution: Theory and Evidence"
+    assert db.episode_authors(row) == [
+        "Ricardo Alonso", "Monica Martinez-Bravo", "Carlos Sanz"]
+    assert row["year"] == 2026
+
+    html = public_client.get("/").text
+    assert "Ambiguous Attribution: Theory and Evidence" in html
+    assert "Ricardo Alonso, Monica Martinez-Bravo and Carlos Sanz" in html
+    assert "Wrong Name" not in html and "MISREAD TITLE" not in html
+
+
+def test_partial_edit_leaves_omitted_fields_alone(public_client, env, tmp_path):
+    """Submitting a field empty clears it; not sending it at all must not."""
+    import db
+
+    public_client.post("/admin/login", data={"password": "hunter2"})
+    eid = _episode(env, tmp_path, title="Keep This Title", status="done",
+                   authors=json.dumps(["Keep Me"]), year=2020,
+                   episode_title="Old title", summary="Old summary.")
+
+    public_client.post(f"/episode/{eid}/edit", data={"episode_title": "New title"})
+
+    row = db.get_episode(eid)
+    assert row["episode_title"] == "New title"
+    assert row["summary"] == "Old summary.", "untouched field survives"
+    assert row["title"] == "Keep This Title"
+    assert db.episode_authors(row) == ["Keep Me"]
+    assert row["year"] == 2020
+
+
+def test_bad_year_does_not_break_the_edit(public_client, env, tmp_path):
+    import db
+
+    public_client.post("/admin/login", data={"password": "hunter2"})
+    eid = _episode(env, tmp_path, title="T", status="done", year=2020)
+
+    public_client.post(f"/episode/{eid}/edit",
+                       data={"paper_title": "T", "authors": "A B", "year": "not a year"})
+    assert db.get_episode(eid)["year"] is None
+
+
 def test_clearing_an_edited_field_restores_the_fallback(public_client, env, tmp_path):
     import db
 

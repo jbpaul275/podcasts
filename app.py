@@ -4,6 +4,7 @@ Concurrency is deliberately trivial: one worker thread draining an in-process
 queue. No Celery, no Redis, no websockets. The UI polls.
 """
 
+import json
 import logging
 import queue
 import re
@@ -450,18 +451,44 @@ def admin(request: Request):
 
 
 @app.post("/episode/{episode_id}/edit")
-def edit_episode(request: Request, episode_id: str,
-                 episode_title: str = Form(""), summary: str = Form("")):
-    """Hand-edit the two public-facing strings. Clearing a field restores the
-    generated fallback rather than leaving the page blank."""
+async def edit_episode(request: Request, episode_id: str):
+    """Hand-edit the public-facing strings. Submitting a field empty restores
+    its generated fallback; omitting it entirely leaves it alone, so a partial
+    form cannot silently wipe values it never showed.
+
+    The form is read raw rather than through Form() parameters, which coerce an
+    empty submitted value to None and so cannot tell "cleared" from "absent".
+
+    Paper title and authors feed the attribution line, where an extraction
+    error misnames a real person on a public page.
+    """
     require_admin(request)
     if not db.get_episode(episode_id):
         raise HTTPException(404, "no such episode")
-    db.update_episode(
-        episode_id,
-        episode_title=" ".join(episode_title.split()) or None,
-        summary=" ".join(summary.split()) or None,
-    )
+
+    form = await request.form()
+
+    def sent(name: str) -> str | None:
+        return " ".join(str(form[name]).split()) if name in form else None
+
+    fields: dict = {}
+    if "episode_title" in form:
+        fields["episode_title"] = sent("episode_title") or None
+    if "summary" in form:
+        fields["summary"] = sent("summary") or None
+    if "paper_title" in form:
+        fields["title"] = sent("paper_title") or None
+    if "authors" in form:
+        names = [" ".join(a.split()) for a in str(form["authors"]).split(",")]
+        fields["authors"] = json.dumps([a for a in names if a])
+    if "year" in form:
+        raw = sent("year") or ""
+        try:
+            fields["year"] = int(raw) if raw else None
+        except ValueError:
+            fields["year"] = None
+
+    db.update_episode(episode_id, **fields)
     return RedirectResponse(f"/episode/{episode_id}", status_code=303)
 
 

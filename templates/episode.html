@@ -101,6 +101,21 @@
                 placeholder="Falls back to the first sentences of the abstract">{{ ep.summary }}</textarea>
       <p class="hint">One or two sentences, around 45 words. Shown on the library, the episode page and in the feed.</p>
 
+      <hr>
+      <p class="hint attribhint">These three build the attribution line. They were read off the PDF by a model, so check them — an error here misnames a real person on a public page.</p>
+
+      <label for="edit-paper-title">Paper title</label>
+      <input id="edit-paper-title" type="text" name="paper_title" value="{{ ep.paper_title }}">
+
+      <label for="edit-authors">Authors</label>
+      <input id="edit-authors" type="text" name="authors" value="{{ ep.authors|join(', ') }}">
+      <p class="hint">Comma separated, in order. Collapses to “First Author et al.” past three.</p>
+
+      <label for="edit-year">Year</label>
+      <input id="edit-year" type="text" name="year" inputmode="numeric" value="{{ ep.year or '' }}">
+
+      <p class="preview"><strong>Preview:</strong> {{ ep.attribution }}</p>
+
       <button type="submit">Save</button>
     </form>
   </details>

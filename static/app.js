@@ -74,17 +74,24 @@
   }
 
   // ---- health line ----
+  // Silent when nothing needs saying. A permanent "worker up" is noise; the
+  // useful signals are that the worker died, or that work is in flight.
   const health = document.getElementById("health");
   function pollHealth() {
     fetch("/health")
-      .then((r) => r.json())
+      .then((r) => (r.ok ? r.json() : Promise.reject()))
       .then((h) => {
-        const bits = [h.worker_alive ? "worker up" : "worker down"];
+        const bits = [];
+        if (!h.worker_alive) bits.push("worker down");
+        if (h.worker_current) bits.push("processing");
         if (h.queue_depth) bits.push(h.queue_depth + " queued");
-        if (h.worker_current) bits.push("working");
         health.textContent = bits.join(" · ");
+        health.classList.toggle("bad", !h.worker_alive);
       })
-      .catch(() => { health.textContent = "server unreachable"; });
+      .catch(() => {
+        health.textContent = "server unreachable";
+        health.classList.add("bad");
+      });
   }
   if (health) { pollHealth(); setInterval(pollHealth, 5000); }
 
