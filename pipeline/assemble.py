@@ -114,22 +114,31 @@ def assemble(episode_id: str, cfg: dict) -> None:
         tmp.unlink(missing_ok=True)
 
 
+REQUIRED_LOUDNORM_KEYS = ("input_i", "input_tp", "input_lra", "input_thresh", "target_offset")
+
+
 def _measure_loudnorm(path, I, TP, LRA) -> dict:
     proc = subprocess.run(
         [
-            "ffmpeg", "-hide_banner", "-i", str(path),
+            "ffmpeg", "-hide_banner", "-nostats", "-i", str(path),
             "-af", f"loudnorm=I={I}:TP={TP}:LRA={LRA}:print_format=json",
             "-f", "null", "-",
         ],
         capture_output=True, text=True,
     )
-    m = re.search(r"\{[^{}]*\}\s*$", proc.stderr.strip())
-    if not m:
-        raise PipelineError(f"loudnorm measurement pass produced no JSON:\n{proc.stderr[-1000:]}")
-    try:
-        return json.loads(m.group(0))
-    except json.JSONDecodeError as e:
-        raise PipelineError(f"could not parse loudnorm JSON: {e}")
+    # ffmpeg prints its stream summary after the loudnorm block, so the JSON is
+    # not at the end of stderr. Take the last brace block that actually parses
+    # and carries the measurement keys.
+    for block in reversed(re.findall(r"\{[^{}]*\}", proc.stderr)):
+        try:
+            data = json.loads(block)
+        except json.JSONDecodeError:
+            continue
+        if all(k in data for k in REQUIRED_LOUDNORM_KEYS):
+            return data
+    raise PipelineError(
+        f"loudnorm measurement pass produced no usable JSON:\n{proc.stderr[-1500:]}"
+    )
 
 
 def _probe_duration(path) -> float | None:

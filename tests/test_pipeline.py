@@ -170,6 +170,67 @@ def test_write_wav_passes_through_real_wav(tmp_path):
     assert out.read_bytes() == data
 
 
+# ------------------------------------------------------- loudnorm parsing
+
+# Real ffmpeg 6.1 stderr: progress lines before the JSON, stream summary and a
+# final progress line after it. The JSON is NOT at the end of stderr.
+FFMPEG_STDERR = (
+    "size=N/A time=00:15:19.90 bitrate=N/A speed=65.1x elapsed=0:00:14.12\r"
+    "size=N/A time=00:15:52.70 bitrate=N/A speed=65.1x elapsed=0:00:14.63\r"
+    '[Parsed_loudnorm_0 @ 0x998c3c900]\n{\n\t"input_i" : "-19.56",\n'
+    '\t"input_tp" : "0.27",\n\t"input_lra" : "5.80",\n\t"input_thresh" : "-30.04",\n'
+    '\t"output_i" : "-16.56",\n\t"output_tp" : "-1.50",\n\t"output_lra" : "5.20",\n'
+    '\t"output_thresh" : "-27.03",\n\t"normalization_type" : "dynamic",\n'
+    '\t"target_offset" : "0.56"\n}\n'
+    "[out#0/null @ 0x998c3c180] video:0KiB audio:358384KiB subtitle:0KiB "
+    "other streams:0KiB global headers:0KiB muxing overhead: unknown\n"
+    "size=N/A time=00:15:55.70 bitrate=N/A speed=65.3x elapsed=0:00:14.64\r"
+)
+
+
+def test_loudnorm_json_parsed_despite_trailing_ffmpeg_output(monkeypatch):
+    import subprocess as sp
+
+    from pipeline import assemble
+
+    monkeypatch.setattr(
+        assemble.subprocess, "run",
+        lambda *a, **k: sp.CompletedProcess(a, 0, stdout="", stderr=FFMPEG_STDERR),
+    )
+    measured = assemble._measure_loudnorm("x.wav", -16.0, -1.5, 11.0)
+
+    assert measured["input_i"] == "-19.56"
+    assert measured["input_tp"] == "0.27"
+    assert measured["target_offset"] == "0.56"
+
+
+def test_loudnorm_raises_when_measurement_truly_missing(monkeypatch):
+    import subprocess as sp
+
+    from pipeline import PipelineError, assemble
+
+    monkeypatch.setattr(
+        assemble.subprocess, "run",
+        lambda *a, **k: sp.CompletedProcess(a, 1, stdout="", stderr="Invalid argument\n"),
+    )
+    with pytest.raises(PipelineError, match="no usable JSON"):
+        assemble._measure_loudnorm("x.wav", -16.0, -1.5, 11.0)
+
+
+def test_loudnorm_ignores_unrelated_brace_blocks(monkeypatch):
+    """A stray JSON-ish blob must not be mistaken for the measurement."""
+    import subprocess as sp
+
+    from pipeline import assemble
+
+    noisy = FFMPEG_STDERR + '\n[something] {"unrelated": "blob"}\n'
+    monkeypatch.setattr(
+        assemble.subprocess, "run",
+        lambda *a, **k: sp.CompletedProcess(a, 0, stdout="", stderr=noisy),
+    )
+    assert assemble._measure_loudnorm("x.wav", -16.0, -1.5, 11.0)["input_i"] == "-19.56"
+
+
 def test_extract_audio_rejects_text_response():
     from pipeline import PipelineError
     from pipeline.tts import _extract_audio
