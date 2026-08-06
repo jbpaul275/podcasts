@@ -15,7 +15,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from email.utils import format_datetime
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 from xml.sax.saxutils import escape as xml_escape
 
 from fastapi import FastAPI, Form, HTTPException, Request, UploadFile
@@ -41,7 +41,7 @@ from config import (
     ROOT,
     load_config,
 )
-from pipeline import PipelineError, ingest, run, script as script_mod
+from pipeline import DuplicateEpisode, PipelineError, ingest, run, script as script_mod
 
 logging.basicConfig(
     level=logging.INFO,
@@ -146,6 +146,9 @@ def _watch_inbox() -> None:
             pending.pop(path, None)
             try:
                 _enqueue_path(path, move_to_processed=True)
+            except DuplicateEpisode as e:
+                log.info("inbox skipped %s: %s", path.name, e)
+                _move_to_processed(path)
             except PipelineError as e:
                 log.error("inbox rejected %s: %s", path.name, e)
                 _move_to_processed(path)
@@ -245,6 +248,18 @@ def _attribution(paper_title: str | None, authors: list[str]) -> str:
     return f"This is an AI generated podcast drawing from “{title}” by {credit}{stop}"
 
 
+def safe_url(raw: str | None) -> str | None:
+    """Only http(s) links survive. This value is rendered into an href, so a
+    javascript: or data: URL here would be script injection on a public page."""
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    parsed = urlparse(raw)
+    if parsed.scheme in ("http", "https") and parsed.netloc:
+        return raw
+    return None
+
+
 _COST_STAGE_LABELS = {
     "metadata": "Metadata extraction",
     "script": "Script generation",
@@ -337,6 +352,10 @@ def _episode_view(row) -> dict:
         "episode_title": row["episode_title"] or "",
         "paper_title": paper_title,
         "attribution": _attribution(row["title"], authors),
+        "attrib_title": paper_title or "an untitled paper",
+        "attrib_credit": _author_credit(authors),
+        "attrib_stop": "" if _author_credit(authors).endswith(".") else ".",
+        "source_url": safe_url(row["source_url"]),
         "summary": _blurb(row),
         "authors": authors,
         "year": row["year"],
@@ -444,10 +463,10 @@ def logout():
 
 
 @app.get("/admin", response_class=HTMLResponse)
-def admin(request: Request):
+def admin(request: Request, error: str = ""):
     if not auth.is_admin(request):
         return RedirectResponse("/admin/login", status_code=303)
-    return _render_library(request, admin_mode=True)
+    return _render_library(request, admin_mode=True, error=error)
 
 
 @app.post("/episode/{episode_id}/edit")
@@ -481,6 +500,8 @@ async def edit_episode(request: Request, episode_id: str):
     if "authors" in form:
         names = [" ".join(a.split()) for a in str(form["authors"]).split(",")]
         fields["authors"] = json.dumps([a for a in names if a])
+    if "source_url" in form:
+        fields["source_url"] = safe_url(str(form["source_url"]))
     if "year" in form:
         raw = sent("year") or ""
         try:
@@ -535,7 +556,7 @@ def library(request: Request):
     return _render_library(request, admin_mode=False)
 
 
-def _render_library(request: Request, admin_mode: bool):
+def _render_library(request: Request, admin_mode: bool, error: str = ""):
     all_episodes = [
         _episode_view(r) for r in db.list_episodes(published_only=not admin_mode)
     ]
@@ -553,6 +574,9 @@ def _render_library(request: Request, admin_mode: bool):
             "failed": failed,
             "admin": admin_mode,
             "signed_in": auth.is_admin(request),
+            "queue": [e for e in all_episodes if e["status"] in run.STAGE_NAMES
+                      or e["status"] == "queued"],
+            "error": error,
             "total_cost": sum(e["cost_usd"] for e in all_episodes),
             "feed_url": CFG["server"]["base_url"].rstrip("/") + "/feed.xml",
             "feed_title": CFG.get("feed", {}).get("title", "Paperpod"),
@@ -571,12 +595,15 @@ async def upload(request: Request, file: UploadFile):
         shutil.copyfileobj(file.file, out)
     try:
         episode_id = _enqueue_path(staged, move_to_processed=True)
+    except DuplicateEpisode as e:
+        # Not a failure: this paper is already in the library. Show the episode
+        # it landed as, rather than bouncing to a page that looks unchanged.
+        _move_to_processed(staged)
+        return RedirectResponse(f"/episode/{e.episode_id}?dup=1", status_code=303)
     except PipelineError as e:
         _move_to_processed(staged)
-        raise HTTPException(400, str(e))
-    if episode_id is None:
-        return RedirectResponse("/?dup=1", status_code=303)
-    return RedirectResponse(f"/episode/{episode_id}", status_code=303)
+        return RedirectResponse(f"/admin?error={quote(str(e))}", status_code=303)
+    return RedirectResponse(f"/episode/{episode_id}?queued=1", status_code=303)
 
 
 @app.get("/episode/{episode_id}", response_class=HTMLResponse)
@@ -737,6 +764,8 @@ def feed():
         blurb = _blurb(row)
         if blurb:
             summary += "\n\n" + blurb
+        if source := safe_url(row["source_url"]):
+            summary += f"\n\nSource paper: {source}"
         try:
             pub = datetime.fromisoformat(row["created_at"])
         except ValueError:

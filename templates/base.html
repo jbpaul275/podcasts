@@ -16,7 +16,7 @@
       <form class="logout" action="/admin/logout" method="post"><button type="submit">Sign out</button></form>
     {% endif %}
   </header>
-  <main>
+  <main class="{% block mainclass %}{% endblock %}">
     {% block content %}{% endblock %}
   </main>
   <footer class="sitefoot">

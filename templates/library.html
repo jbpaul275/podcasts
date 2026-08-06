@@ -1,12 +1,18 @@
 {% extends "base.html" %}
 {% block title %}{{ feed_title }}{% endblock %}
 {% block wordmark %}{% endblock %}
+{% block mainclass %}{{ 'wide' if admin }}{% endblock %}
 {% block content %}
+
+<div class="{{ 'adminlayout' if admin }}">
+<div class="libcol">
 
 <div class="libhead">
   <h1>{{ feed_title }}</h1>
   <p class="blurb">{{ feed_description }}</p>
 </div>
+
+{% if admin and error %}<p class="error flash">{{ error }}</p>{% endif %}
 
 <ul class="posts">
 {% for ep in episodes %}
@@ -20,7 +26,7 @@
       <a href="/episode/{{ ep.id }}">{{ ep.title }}</a>
     </h2>
 
-    <p class="attribution">{{ ep.attribution }}</p>
+    <p class="attribution">This is an AI generated podcast drawing from {% if ep.source_url %}<a href="{{ ep.source_url }}" rel="noopener nofollow" target="_blank">“{{ ep.attrib_title }}”</a>{% else %}“{{ ep.attrib_title }}”{% endif %} by {{ ep.attrib_credit }}{{ ep.attrib_stop }}</p>
 
     {% if ep.summary %}<p class="postsummary">{{ ep.summary }}</p>{% endif %}
 
@@ -42,7 +48,7 @@
     {%- elif failed -%}
       No finished episodes yet — see the failures below.
     {%- else -%}
-      Nothing here yet. Drop a paper in below.
+      Nothing here yet. Drop a paper in to get started.
     {%- endif -%}
   </p>
 {% endif %}
@@ -62,21 +68,41 @@
   </details>
 {% endif %}
 
+</div>
+
 {% if admin %}
-<details class="addpaper">
-  <summary>Add a paper</summary>
+<aside class="sidebar">
   <form class="dropzone" id="dropzone" action="/upload" method="post" enctype="multipart/form-data">
     <input type="file" name="file" id="fileinput" accept="application/pdf" hidden>
-    <p><strong>Drop a PDF here</strong> or <button type="button" id="pickfile">choose a file</button></p>
-    <p class="muted">Or copy one into <code>data/inbox/</code> — it gets picked up automatically.</p>
+    <p><strong>Drop a PDF</strong><br>or <button type="button" id="pickfile">choose a file</button></p>
   </form>
-  <p class="muted libstats">
-    {{ episodes|length }} episode{{ '' if episodes|length == 1 else 's' }} ·
-    ${{ '%.3f'|format(total_cost) }} total API cost ·
-    <a href="/feed.xml">feed.xml</a> <span class="feedurl">({{ feed_url }})</span>
+
+  <section class="queue" id="queue" data-count="{{ queue|length }}">
+    <h2>Queue</h2>
+    {% if queue %}
+      <ol>
+        {% for ep in queue %}
+          <li>
+            <a href="/episode/{{ ep.id }}">{{ ep.title }}</a>
+            <span class="status status-{{ ep.status }}">{{ ep.status }}</span>
+          </li>
+        {% endfor %}
+      </ol>
+      <p class="hint">One episode is processed at a time. Uploading while one is
+        running is fine — it queues behind.</p>
+    {% else %}
+      <p class="hint">Nothing processing.</p>
+    {% endif %}
+  </section>
+
+  <p class="sidestats">
+    {{ episodes|length }} episode{{ '' if episodes|length == 1 else 's' }}<br>
+    ${{ '%.3f'|format(total_cost) }} API cost<br>
+    <a href="/feed.xml">feed.xml</a>
   </p>
-</details>
+</aside>
 {% endif %}
+</div>
 
 <audio id="miniplayer" preload="none"></audio>
 

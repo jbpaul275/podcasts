@@ -17,23 +17,25 @@ import fitz  # pymupdf
 
 import db
 from config import PAPERS_DIR, load_prompt
-from . import PipelineError
+from . import DuplicateEpisode, PipelineError
 from .gemini import call_with_retry, client, pdf_part, record_cost, strip_fences
 
 log = logging.getLogger("paperpod.ingest")
 
 
-def ingest_pdf(path: str | Path, cfg: dict) -> str | None:
-    """Validate and register a PDF. Returns the new episode id, or None if the
-    file was a duplicate. Validation failures create a `failed` episode row so
-    they are visible in the library, and raise PipelineError."""
+def ingest_pdf(path: str | Path, cfg: dict) -> str:
+    """Validate and register a PDF, returning the new episode id.
+
+    Raises DuplicateEpisode (carrying the existing id) when this content has
+    already been ingested. Validation failures create a `failed` episode row so
+    they stay visible in the library, and raise PipelineError."""
     path = Path(path)
     sha = hashlib.sha256(path.read_bytes()).hexdigest()
 
     existing = db.find_by_sha(sha)
     if existing:
         log.info("skipping %s: duplicate of episode %s", path.name, existing["id"])
-        return None
+        raise DuplicateEpisode(existing["id"])
 
     episode_id = db.new_ulid()
     dest = PAPERS_DIR / f"{episode_id}.pdf"
