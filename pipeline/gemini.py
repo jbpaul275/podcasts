@@ -54,17 +54,41 @@ def retry_delay(exc) -> float | None:
     return float(m.group(1)) if m else None
 
 
-def quota_is_unavailable(exc) -> bool:
-    """A 429 carrying `limit: 0` means the plan grants no allowance for this
-    model at all. That is a billing state, not congestion, so no amount of
-    waiting will clear it."""
+def terminal_quota_reason(exc) -> str | None:
+    """Why a 429 cannot clear by waiting inside this run, or None if it can.
+
+    Two shapes qualify. `limit: 0` means the plan grants no allowance for this
+    model at all. A *per-day* quota violation means the allowance is spent until
+    the quota window rolls over — hours away, not seconds. Both are billing
+    states rather than congestion, and retrying either one only burns wall-clock
+    before failing anyway.
+    """
     if getattr(exc, "code", None) != 429:
-        return False
+        return None
+
+    payload = _payload(exc)
     try:
-        blob = json.dumps(_payload(exc))
+        blob = json.dumps(payload)
     except (TypeError, ValueError):
         blob = str(exc)
-    return bool(re.search(r"limit:\s*0\b", blob + " " + str(exc)))
+    if re.search(r"limit:\s*0\b", blob + " " + str(exc)):
+        return "the plan grants no quota for this model (limit: 0)"
+
+    for detail in payload.get("details") or []:
+        if not str(detail.get("@type", "")).endswith("QuotaFailure"):
+            continue
+        for violation in detail.get("violations") or []:
+            if "PerDay" in str(violation.get("quotaId", "")):
+                cap = violation.get("quotaValue")
+                return (
+                    "the daily quota is exhausted"
+                    + (f" ({cap} requests/day on this plan)" if cap else "")
+                )
+    return None
+
+
+def quota_is_unavailable(exc) -> bool:
+    return terminal_quota_reason(exc) is not None
 
 
 def is_retryable(exc) -> bool:
@@ -93,18 +117,18 @@ def call_with_retry(fn, cfg: dict, model: str, label: str = "request",
             delay = base * (2 ** attempt)
         except Exception as e:
             last = e
-            if quota_is_unavailable(e):
+            if reason := terminal_quota_reason(e):
                 raise QuotaUnavailable(
-                    f"{model} has no quota on this API key's plan (limit: 0). "
-                    "Retrying cannot help — enable billing on the project, or "
-                    "point [models] in config.toml at a model you have access to."
+                    f"{model}: {reason}. Retrying cannot help — enable billing on "
+                    "the project, wait for the quota to reset, or point [models] "
+                    "at a model you have allowance for."
                 ) from e
             if not is_retryable(e):
                 raise
             # Prefer the server's own delay; it knows when the window reopens.
-            delay = retry_delay(e)
-            if delay is None:
-                delay = base * (2 ** attempt)
+            # A stated 0s is not a usable instruction — an immediate retry just
+            # burns an attempt — so fall back to backoff for that too.
+            delay = retry_delay(e) or base * (2 ** attempt)
 
         if attempt == attempts - 1:
             break

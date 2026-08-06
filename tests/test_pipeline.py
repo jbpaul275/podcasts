@@ -660,3 +660,93 @@ def test_config_file_is_used_when_env_is_absent(monkeypatch):
     importlib.reload(config)
     cfg = config.load_config()
     assert cfg["models"]["tts"].startswith("gemini")
+
+
+# ------------------------------------------------- daily quota exhaustion
+
+# The real body returned when the free-tier TTS day is spent. Note retryDelay
+# of 0s, which invited an immediate, pointless retry.
+DAILY_EXHAUSTED = {
+    "error": {
+        "code": 429,
+        "message": ("You exceeded your current quota. Quota exceeded for metric: "
+                    "generativelanguage.googleapis.com/generate_content_free_tier_requests, "
+                    "limit: 10, model: gemini-3.1-flash-tts. Please retry in 303.987666ms."),
+        "status": "RESOURCE_EXHAUSTED",
+        "details": [
+            {"@type": "type.googleapis.com/google.rpc.QuotaFailure",
+             "violations": [{
+                 "quotaMetric": "generativelanguage.googleapis.com/generate_content_free_tier_requests",
+                 "quotaId": "GenerateRequestsPerDayPerProjectPerModel-FreeTier",
+                 "quotaDimensions": {"model": "gemini-3.1-flash-tts", "location": "global"},
+                 "quotaValue": "10"}]},
+            {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "0s"},
+        ],
+    }
+}
+
+
+def test_daily_quota_exhaustion_is_terminal(monkeypatch):
+    """It reads as an ordinary rate limit, but the window is a day away — the
+    whole episode ground through retries for 20 minutes and produced nothing."""
+    from pipeline import QuotaUnavailable
+    from pipeline.gemini import call_with_retry, terminal_quota_reason
+
+    err = _api_error(429, DAILY_EXHAUSTED)
+    reason = terminal_quota_reason(err)
+    assert reason and "daily quota" in reason
+    assert "10 requests/day" in reason
+
+    slept, calls = [], []
+    monkeypatch.setattr("pipeline.gemini.time.sleep", slept.append)
+
+    def always():
+        calls.append(1)
+        raise _api_error(429, DAILY_EXHAUSTED)
+
+    with pytest.raises(QuotaUnavailable, match="daily quota"):
+        call_with_retry(always, RETRY_CFG, "gemini-3.1-flash-tts-preview", "tts chunk 000")
+    assert calls == [1], "a per-day quota cannot clear inside one run"
+    assert slept == []
+
+
+def test_per_minute_rate_limit_is_still_retried(monkeypatch):
+    """Only per-day violations are terminal; per-minute ones must ride out."""
+    from pipeline.gemini import call_with_retry, terminal_quota_reason
+
+    per_minute = {"error": {"code": 429, "message": "slow down", "details": [
+        {"@type": "type.googleapis.com/google.rpc.QuotaFailure",
+         "violations": [{"quotaId": "GenerateRequestsPerMinutePerProjectPerModel-FreeTier"}]},
+        {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "12s"},
+    ]}}
+    assert terminal_quota_reason(_api_error(429, per_minute)) is None
+
+    slept, calls = [], []
+    monkeypatch.setattr("pipeline.gemini.time.sleep", slept.append)
+
+    def flaky():
+        calls.append(1)
+        if len(calls) < 2:
+            raise _api_error(429, per_minute)
+        return "ok"
+
+    assert call_with_retry(flaky, RETRY_CFG, "m", "x") == "ok"
+    assert slept == [12.5]
+
+
+def test_zero_retry_delay_falls_back_to_backoff(monkeypatch):
+    """A stated 0s is not a usable instruction; retrying instantly burns an
+    attempt for nothing."""
+    from pipeline.gemini import call_with_retry
+
+    zero = {"error": {"code": 503, "message": "overloaded", "details": [
+        {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "0s"}]}}
+    slept = []
+    monkeypatch.setattr("pipeline.gemini.time.sleep", slept.append)
+
+    def always():
+        raise _api_error(503, zero)
+
+    with pytest.raises(Exception):
+        call_with_retry(always, RETRY_CFG, "m", "x")
+    assert slept == [2.5, 4.5], "backed off instead of hammering"
