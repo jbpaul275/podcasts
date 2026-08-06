@@ -1,0 +1,25 @@
+app = "paperpod"
+primary_region = "iad"   # change to the region nearest you
+
+[build]
+
+[env]
+  PAPERPOD_DATA_DIR = "/data"
+  PAPERPOD_BASE_URL = "https://paperpod.org"
+
+# The library — SQLite, PDFs, audio — lives here. Without this, a redeploy
+# wipes everything.
+[[mounts]]
+  source = "paperpod_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = false   # a stopped machine cannot run the worker thread
+  auto_start_machines = true
+  min_machines_running = 1
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1gb"   # ffmpeg loudnorm on a 15-minute episode wants headroom

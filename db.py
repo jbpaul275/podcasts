@@ -30,7 +30,9 @@ CREATE TABLE IF NOT EXISTS episode (
   duration_s    REAL,
   error         TEXT,
   cost_usd      REAL DEFAULT 0,
-  cost_json     TEXT                -- {stage: usd} breakdown
+  cost_json     TEXT,               -- {stage: usd} breakdown
+  published     INTEGER DEFAULT 0,  -- visible on the public site and feed
+  flags_reviewed INTEGER DEFAULT 0  -- citation flags checked by a human
 );
 CREATE INDEX IF NOT EXISTS idx_episode_sha ON episode(sha256);
 
@@ -81,7 +83,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
     """Additive column migrations, so an existing library survives an upgrade."""
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(episode)")}
     for name, decl in (("summary", "TEXT"), ("episode_title", "TEXT"),
-                       ("cost_json", "TEXT")):
+                       ("cost_json", "TEXT"),
+                       ("published", "INTEGER DEFAULT 0"),
+                       ("flags_reviewed", "INTEGER DEFAULT 0")):
         if name not in cols:
             conn.execute(f"ALTER TABLE episode ADD COLUMN {name} {decl}")
     conn.commit()
@@ -104,9 +108,10 @@ def get_episode(id: str) -> sqlite3.Row | None:
     return get_conn().execute("SELECT * FROM episode WHERE id = ?", (id,)).fetchone()
 
 
-def list_episodes() -> list[sqlite3.Row]:
+def list_episodes(published_only: bool = False) -> list[sqlite3.Row]:
+    where = "WHERE published = 1 AND status = 'done'" if published_only else ""
     return get_conn().execute(
-        "SELECT * FROM episode ORDER BY created_at DESC, id DESC"
+        f"SELECT * FROM episode {where} ORDER BY created_at DESC, id DESC"
     ).fetchall()
 
 

@@ -9,12 +9,12 @@
     {%- if ep.year %}{{ ep.year }}{% endif %}{% if ep.venue %}{% if ep.year %} · {% endif %}{{ ep.venue }}{% endif %}
   </p>
   <p class="meta">
-    <span class="status status-{{ ep.status }}">{{ ep.status }}</span>
+    {% if admin %}<span class="status status-{{ ep.status }}">{{ ep.status }}</span>{% endif %}
     {% if ep.has_audio %}<span>{{ ep.duration }}</span>{% endif %}
-    <span class="cost">${{ '%.4f'|format(ep.cost_usd) }} API cost</span>
+    {% if admin %}<span class="cost">${{ '%.4f'|format(ep.cost_usd) }} API cost</span>{% endif %}
   </p>
 
-  {% if ep.error %}<p class="error">{{ ep.error }}</p>{% endif %}
+  {% if admin and ep.error %}<p class="error">{{ ep.error }}</p>{% endif %}
 
   {% if ep.has_audio %}
     <audio class="player" controls preload="metadata" src="/episode/{{ ep.id }}/audio"></audio>
@@ -29,7 +29,7 @@
     </details>
   {% endif %}
 
-  {% if ep.flags_unverified %}
+  {% if admin and ep.flags_unverified %}
     <section class="flagbox" id="flags">
       <h2>{{ ep.flags_unverified|length }} citation{{ '' if ep.flags_unverified|length == 1 else 's' }} not found in the paper</h2>
       <p class="muted">These names or years do not appear in the source PDF. Check each one — this is where fabrications show up.</p>
@@ -39,7 +39,7 @@
     </section>
   {% endif %}
 
-  {% if ep.flags_in_paper %}
+  {% if admin and ep.flags_in_paper %}
     <details class="flagbox verified" {% if not ep.flags_unverified %}id="flags"{% endif %}>
       <summary>{{ ep.flags_in_paper|length }} citation-shaped string{{ '' if ep.flags_in_paper|length == 1 else 's' }} traced back to the paper</summary>
       <p class="muted">Found in the source PDF, so not fabricated. Listed for completeness.</p>
@@ -63,7 +63,7 @@
     </section>
   {% endif %}
 
-  {% if ep.cost_breakdown %}
+  {% if admin and ep.cost_breakdown %}
     <section class="costs">
       <h2>API cost</h2>
       <table>
@@ -83,6 +83,35 @@
       </table>
     </section>
   {% endif %}
+
+  {% if admin %}
+  <section class="publish {{ 'is-public' if ep.published else '' }}">
+    <h2>Visibility</h2>
+    {% if ep.published %}
+      <p>Live on the public site and in the feed.</p>
+      <form action="/episode/{{ ep.id }}/publish" method="post">
+        <input type="hidden" name="published" value="0">
+        <button type="submit">Unpublish</button>
+      </form>
+    {% elif publish_blocker %}
+      <p class="blocked">Not publishable yet — {{ publish_blocker }}.</p>
+      {% if publish_blocker == 'citation flags not reviewed' %}
+        <form action="/episode/{{ ep.id }}/publish" method="post">
+          <input type="hidden" name="published" value="1">
+          <input type="hidden" name="reviewed" value="1">
+          <label><input type="checkbox" required>
+            I checked every flagged citation against the paper</label>
+          <button type="submit">Mark reviewed and publish</button>
+        </form>
+      {% endif %}
+    {% else %}
+      <p class="muted">Private. Only you can see this page and its audio.</p>
+      <form action="/episode/{{ ep.id }}/publish" method="post">
+        <input type="hidden" name="published" value="1">
+        <button type="submit">Publish</button>
+      </form>
+    {% endif %}
+  </section>
 
   <section class="stages">
     <h2>Stage log</h2>
@@ -111,6 +140,7 @@
     </form>
     <button class="danger delete-episode" data-episode="{{ ep.id }}">Delete episode</button>
   </section>
+  {% endif %}
 </article>
 
 {% endblock %}

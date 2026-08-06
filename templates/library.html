@@ -28,7 +28,8 @@
       {% if ep.year %}<span>{{ ep.year }}</span>{% endif %}
       {% if ep.has_audio %}<span>{{ ep.duration }}</span>{% endif %}
       {% if ep.status != 'done' %}<span class="status status-{{ ep.status }}">{{ ep.status }}</span>{% endif %}
-      {% if ep.flag_count %}<a class="flagcount" href="/episode/{{ ep.id }}#flags">{{ ep.flag_count }} flag{{ '' if ep.flag_count == 1 else 's' }}</a>{% endif %}
+      {% if admin %}<span class="status status-{{ 'done' if ep.published else 'queued' }}">{{ 'public' if ep.published else 'private' }}</span>{% endif %}
+      {% if admin and ep.flag_count %}<a class="flagcount" href="/episode/{{ ep.id }}#flags">{{ ep.flag_count }} flag{{ '' if ep.flag_count == 1 else 's' }}</a>{% endif %}
     </p>
   </li>
 {% endfor %}
@@ -36,11 +37,11 @@
 
 {% if not episodes %}
   <p class="empty">
-    {% if failed %}No finished episodes yet — see the failures below.{% else %}Nothing here yet. Drop a paper in below.{% endif %}
+    {% if admin and failed %}No finished episodes yet — see the failures below.{% else %}Nothing here yet. Drop a paper in below.{% endif %}
   </p>
 {% endif %}
 
-{% if failed %}
+{% if admin and failed %}
   <details class="failures">
     <summary>{{ failed|length }} failed</summary>
     <ul>
@@ -55,6 +56,7 @@
   </details>
 {% endif %}
 
+{% if admin %}
 <details class="addpaper">
   <summary>Add a paper</summary>
   <form class="dropzone" id="dropzone" action="/upload" method="post" enctype="multipart/form-data">
@@ -68,6 +70,7 @@
     <a href="/feed.xml">feed.xml</a> <span class="feedurl">({{ feed_url }})</span>
   </p>
 </details>
+{% endif %}
 
 <audio id="miniplayer" preload="none"></audio>
 

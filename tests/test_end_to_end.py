@@ -492,6 +492,11 @@ def test_health_route(client):
     assert "queue_depth" in body and "worker_alive" in body
 
 
+def _publish(episode_id):
+    import db
+    db.update_episode(episode_id, published=1, status="done", flags_reviewed=1)
+
+
 def test_library_lists_episodes(client, env, tmp_path):
     import db
     from pipeline import ingest
@@ -500,7 +505,7 @@ def test_library_lists_episodes(client, env, tmp_path):
     db.update_episode(episode_id, title="A Paper About Wages",
                       authors=json.dumps(["Jane Roe"]), status="done")
 
-    html = client.get("/").text
+    html = client.get("/admin").text
     assert "A Paper About Wages" in html
     assert "Jane Roe" in html
 
@@ -518,6 +523,7 @@ def test_library_shows_summary_and_play_button(client, env, tmp_path):
         audio_path=str(pdf), duration_s=612.0,
     )
 
+    _publish(episode_id)
     html = client.get("/").text
     assert "Raising the minimum wage barely moved employment." in html
     assert f'data-src="/episode/{episode_id}/audio"' in html, "inline play button"
@@ -538,6 +544,7 @@ def test_library_falls_back_to_abstract_when_no_summary(client, env, tmp_path):
                  "that should not appear in the listing at all.",
     )
 
+    _publish(episode_id)
     html = client.get("/").text
     assert "We study minimum wages. We use a border design." in html
     assert "A third sentence" not in html
@@ -564,7 +571,7 @@ def test_no_play_button_before_audio_exists(client, env, tmp_path):
     episode_id = ingest.ingest_pdf(pdf, env["cfg"])
     db.update_episode(episode_id, title="Still Cooking", status="scripting")
 
-    html = client.get("/").text
+    html = client.get("/admin").text
     assert "Still Cooking" in html
     assert 'class="play"' not in html
     assert "scripting" in html, "in-flight status still visible while browsing"
@@ -585,6 +592,7 @@ def test_episode_title_and_attribution(client, env, tmp_path):
         episode_title="Who gets blamed when nobody knows who decided",
     )
 
+    _publish(eid)
     for url in ("/", f"/episode/{eid}"):
         html = client.get(url).text
         assert "Who gets blamed when nobody knows who decided" in html
@@ -604,7 +612,7 @@ def test_falls_back_to_paper_title_before_scripting(client, env, tmp_path):
     db.update_episode(eid, title="A Perfectly Fine Paper Title", status="scripting",
                       authors=json.dumps(["Jane Roe"]))
 
-    html = client.get("/").text
+    html = client.get("/admin").text
     assert "A Perfectly Fine Paper Title" in html
     assert "by Jane Roe" in html
 
@@ -631,6 +639,7 @@ def test_feed_carries_episode_title_and_disclosure(client, env, tmp_path):
 
     eid = _done_episode(env, tmp_path)
     db.update_episode(eid, episode_title="The Blame Nobody Claims")
+    _publish(eid)
 
     root = ET.fromstring(client.get("/feed.xml").content)
     item = root.find("channel/item")
@@ -652,7 +661,7 @@ def test_failures_are_collapsed_out_of_the_reading_list(client, env, tmp_path):
         db.update_episode(eid, title=title, status=status, error=err,
                           summary=f"Summary of {title}.")
 
-    html = client.get("/").text
+    html = client.get("/admin").text
     assert "A Finished Episode" in html
     assert "Summary of A Finished Episode." in html
     # The failure is reachable but out of the main list, with no summary line.
@@ -672,7 +681,7 @@ def test_long_error_is_truncated_in_the_library(client, env, tmp_path):
     dump = "loudnorm measurement pass produced no JSON: " + ("size=N/A time=00:12:34 " * 80)
     db.update_episode(eid, title="Noisy Failure", status="failed", error=dump)
 
-    html = client.get("/").text
+    html = client.get("/admin").text
     assert "loudnorm measurement pass produced no JSON" in html
     assert dump not in html, "the whole dump must not reach the library"
     # ...but the episode page keeps it in full.
@@ -740,6 +749,7 @@ def test_feed_is_valid_rss_with_itunes_tags(client, env, tmp_path):
     import xml.etree.ElementTree as ET
 
     episode_id = _done_episode(env, tmp_path)
+    _publish(episode_id)
     resp = client.get("/feed.xml")
     assert resp.status_code == 200
     assert "rss" in resp.headers["content-type"]
@@ -788,7 +798,7 @@ def test_feed_escapes_xml_in_titles(client, env, tmp_path):
     pdf = tmp_path / "a.pdf"
     _make_pdf(pdf)
     episode_id = ingest.ingest_pdf(pdf, env["cfg"])
-    db.update_episode(episode_id, status="done", audio_path=str(pdf),
+    db.update_episode(episode_id, status="done", audio_path=str(pdf), published=1,
                       title="Wages & Jobs: <Reconsidered>", duration_s=610.0)
 
     root = ET.fromstring(client.get("/feed.xml").content)  # would raise if unescaped
@@ -838,3 +848,169 @@ def test_retry_enqueues_named_stage(client, env, tmp_path):
 def test_upload_rejects_non_pdf(client):
     resp = client.post("/upload", files={"file": ("notes.txt", b"hello", "text/plain")})
     assert resp.status_code == 400
+
+
+# ------------------------------------------------------- public/admin split
+
+@pytest.fixture
+def public_client(env, tmp_path, monkeypatch):
+    """A client with a password configured and no session: i.e. the internet."""
+    from fastapi.testclient import TestClient
+
+    import app as app_mod
+
+    monkeypatch.setenv("PAPERPOD_ADMIN_PASSWORD", "hunter2")
+    monkeypatch.setattr(app_mod, "CFG", env["cfg"])
+    monkeypatch.setattr(app_mod, "FINAL_DIR", env["final"])
+    monkeypatch.setattr(app_mod, "PAPERS_DIR", env["papers"])
+    monkeypatch.setattr(app_mod, "CHUNKS_DIR", env["chunks"])
+    monkeypatch.setattr(app_mod, "_worker", lambda: None)
+    monkeypatch.setattr(app_mod, "_watch_inbox", lambda: None)
+    with TestClient(app_mod.app) as c:
+        yield c
+
+
+def _episode(env, tmp_path, name="a", **fields):
+    import db
+    from pipeline import ingest
+
+    pdf = tmp_path / f"{name}.pdf"
+    _make_pdf(pdf)
+    eid = ingest.ingest_pdf(pdf, env["cfg"])
+    db.update_episode(eid, **fields)
+    return eid
+
+
+def test_unpublished_episodes_are_invisible_to_the_public(public_client, env, tmp_path):
+    eid = _episode(env, tmp_path, title="Secret Draft", status="done",
+                   audio_path=str(tmp_path / "a.pdf"), published=0)
+
+    assert "Secret Draft" not in public_client.get("/").text
+    assert public_client.get(f"/episode/{eid}").status_code == 404
+    assert public_client.get(f"/episode/{eid}/audio").status_code == 404
+    assert eid not in public_client.get("/feed.xml").text
+
+
+def test_mutating_routes_are_closed_to_the_public(public_client, env, tmp_path):
+    """These cost money or destroy data; an open internet must not reach them."""
+    eid = _episode(env, tmp_path, title="Live One", status="done", published=1)
+
+    assert public_client.post(f"/episode/{eid}/retry",
+                              data={"stage": "scripting"}).status_code == 401
+    assert public_client.delete(f"/episode/{eid}").status_code == 401
+    assert public_client.post(f"/episode/{eid}/publish",
+                              data={"published": "0"}).status_code == 401
+    assert public_client.post(
+        "/upload", files={"file": ("x.pdf", b"%PDF-1.4", "application/pdf")}
+    ).status_code == 401
+    assert public_client.get("/health").status_code == 401
+
+    import db
+    assert db.get_episode(eid)["published"] == 1, "nothing was mutated"
+
+
+def test_admin_area_requires_login(public_client):
+    resp = public_client.get("/admin", follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/admin/login"
+
+
+def test_login_grants_admin_then_logout_revokes_it(public_client, env, tmp_path):
+    _episode(env, tmp_path, title="Secret Draft", status="done", published=0)
+
+    assert public_client.post("/admin/login", data={"password": "wrong"},
+                              follow_redirects=False).headers["location"].endswith("error=1")
+
+    resp = public_client.post("/admin/login", data={"password": "hunter2"},
+                              follow_redirects=False)
+    assert resp.status_code == 303
+    assert "Secret Draft" in public_client.get("/admin").text
+
+    public_client.post("/admin/logout", follow_redirects=False)
+    assert public_client.get("/admin", follow_redirects=False).status_code == 303
+
+
+def test_forged_session_cookie_is_rejected(public_client, env, tmp_path):
+    import time as _t
+
+    _episode(env, tmp_path, title="Secret Draft", status="done", published=0)
+    public_client.cookies.set("paperpod_admin", f"{int(_t.time()) + 9999}.deadbeef")
+    assert public_client.get("/admin", follow_redirects=False).status_code == 303
+
+
+def test_expired_session_is_rejected():
+    import auth
+
+    assert not auth.token_is_valid("1.abc")
+    assert not auth.token_is_valid("")
+    assert not auth.token_is_valid("garbage")
+
+
+def test_admin_open_locally_when_no_password_is_set(client, env, tmp_path):
+    """Convenience for local use -- and it fails closed, because a deploy that
+    forgets the password locks admin out rather than exposing it."""
+    import os
+
+    import auth
+
+    assert os.environ.get("PAPERPOD_ADMIN_PASSWORD") is None
+    _episode(env, tmp_path, title="Local Draft", status="done", published=0)
+    assert "Local Draft" in client.get("/admin").text
+    assert auth.admin_password() is None
+
+
+def test_publish_requires_reviewed_flags(public_client, env, tmp_path):
+    import db
+
+    public_client.post("/admin/login", data={"password": "hunter2"})
+    eid = _episode(
+        env, tmp_path, title="Flagged", status="done",
+        audio_path=str(tmp_path / "a.pdf"),
+        script_md="HOST_A: As Fabricated Author (1999) showed, things happened.",
+    )
+
+    blocked = public_client.post(f"/episode/{eid}/publish", data={"published": "1"})
+    assert blocked.status_code == 400
+    assert "flags not reviewed" in blocked.text
+    assert db.get_episode(eid)["published"] == 0
+
+    ok = public_client.post(f"/episode/{eid}/publish",
+                            data={"published": "1", "reviewed": "1"})
+    assert ok.status_code == 200
+    assert db.get_episode(eid)["published"] == 1
+
+
+def test_cannot_publish_an_unfinished_episode(public_client, env, tmp_path):
+    public_client.post("/admin/login", data={"password": "hunter2"})
+    eid = _episode(env, tmp_path, title="Cooking", status="scripting")
+
+    resp = public_client.post(f"/episode/{eid}/publish", data={"published": "1"})
+    assert resp.status_code == 400
+    assert "not done" in resp.text
+
+
+def test_admin_library_marks_public_and_private(public_client, env, tmp_path):
+    public_client.post("/admin/login", data={"password": "hunter2"})
+    _episode(env, tmp_path, name="live", title="Live One", status="done", published=1)
+    _episode(env, tmp_path, name="draft", title="Draft One", status="done", published=0)
+
+    html = public_client.get("/admin").text
+    live = html.index("Live One")
+    draft = html.index("Draft One")
+    lo, hi = (min(live, draft), max(live, draft))
+    assert "public" in html[lo:hi] or "public" in html[hi:]
+    assert html.count("private") >= 1 and html.count("public") >= 1
+
+
+def test_public_page_hides_operator_detail(public_client, env, tmp_path):
+    eid = _episode(
+        env, tmp_path, title="Live One", status="done", published=1,
+        audio_path=str(tmp_path / "a.pdf"), cost_usd=0.64, flags_reviewed=1,
+        script_md="HOST_A: As Fabricated Author (1999) showed, things happened.",
+    )
+    html = public_client.get(f"/episode/{eid}").text
+
+    assert "Live One" in html and "things happened" in html
+    for leak in ("API cost", "0.64", "Stage log", "Delete episode",
+                 "not found in the paper", "Visibility"):
+        assert leak not in html, f"{leak!r} must not reach the public page"

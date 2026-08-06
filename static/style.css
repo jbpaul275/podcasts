@@ -153,6 +153,24 @@ audio { width: 100%; margin-top: 0.85rem; }
 .script .turn.flagged { background: #fffbf3; }
 .inlineflag { display: block; margin-top: 0.3rem; color: var(--flag); font-size: 0.8rem; }
 
+/* admin chrome */
+.adminlink { font-size: 0.8rem; color: var(--muted); text-decoration: none; }
+.adminlink:hover { color: var(--a); }
+.logout { display: inline; }
+.logout button { border: none; background: none; padding: 0; font-size: 0.8rem; color: var(--muted); cursor: pointer; }
+.logout button:hover { color: var(--a); }
+
+.loginbox { max-width: 22rem; margin: 4rem auto; }
+.loginbox form { display: flex; gap: 0.5rem; margin-top: 1rem; }
+.loginbox input { flex: 1; font: inherit; font-size: 0.95rem; padding: 0.4rem 0.6rem; border: 1px solid var(--rule); border-radius: 6px; background: var(--card); color: var(--ink); }
+
+.publish { border: 1px solid var(--rule); border-radius: 8px; padding: 0.9rem 1.1rem; margin-top: 2.5rem; }
+.publish.is-public { border-color: #1a7f45; }
+.publish h2 { margin: 0 0 0.4rem; }
+.publish p { margin: 0 0 0.7rem; font-size: 0.9rem; }
+.publish .blocked { color: var(--flag); }
+.publish label { display: block; font-size: 0.85rem; margin-bottom: 0.6rem; color: var(--muted); }
+
 /* cost breakdown */
 .costs table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
 .costs td { padding: 0.3rem 0.6rem 0.3rem 0; border-bottom: 1px solid var(--rule); }

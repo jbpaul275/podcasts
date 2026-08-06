@@ -29,6 +29,7 @@ from fastapi.responses import (
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+import auth
 import db
 from config import (
     CHUNKS_DIR,
@@ -58,6 +59,11 @@ async def lifespan(app: FastAPI):
     threading.Thread(target=_worker, daemon=True, name="paperpod-worker").start()
     threading.Thread(target=_watch_inbox, daemon=True, name="paperpod-watcher").start()
     log.info("paperpod up; base_url=%s", CFG["server"]["base_url"])
+    if auth.admin_password() is None:
+        log.warning(
+            "PAPERPOD_ADMIN_PASSWORD is not set — the admin surface is reachable "
+            "from localhost only. Set it before exposing this to a network."
+        )
     yield
 
 
@@ -323,6 +329,8 @@ def _episode_view(row) -> dict:
         "duration": _fmt_duration(row["duration_s"]),
         "cost_usd": row["cost_usd"] or 0.0,
         "cost_breakdown": _cost_rows(row),
+        "published": bool(row["published"]),
+        "flags_reviewed": bool(row["flags_reviewed"]),
         "flag_count": len(unverified),
         "flags": flags,
         "flags_unverified": unverified,
@@ -353,6 +361,29 @@ def _script_lines(script_md: str, flags: list[dict]) -> list[dict]:
 # routes
 # --------------------------------------------------------------------------
 
+def require_admin(request: Request) -> None:
+    if not auth.is_admin(request):
+        raise HTTPException(401, "admin only")
+
+
+def unverified_flag_count(row) -> int:
+    if not row["script_md"]:
+        return 0
+    flags = script_mod.citation_flags(row["script_md"], _paper_text(row["id"]))
+    return sum(1 for f in flags if not f.get("in_paper"))
+
+
+def publish_blocker(row) -> str | None:
+    """Why this episode cannot go public yet, or None if it can."""
+    if row["status"] != "done":
+        return f"episode is {row['status']}, not done"
+    if not row["audio_path"] or not Path(row["audio_path"]).exists():
+        return "no audio file on disk"
+    if unverified_flag_count(row) and not row["flags_reviewed"]:
+        return "citation flags not reviewed"
+    return None
+
+
 def _short_error(text: str | None, limit: int = 150) -> str:
     """Errors can carry a whole ffmpeg stderr dump. The library gets a
     readable first line; the episode page keeps the full text."""
@@ -363,20 +394,86 @@ def _short_error(text: str | None, limit: int = 150) -> str:
     return first if len(first) <= limit else first[:limit].rsplit(" ", 1)[0] + "…"
 
 
+@app.get("/admin/login", response_class=HTMLResponse)
+def login_form(request: Request, error: str = ""):
+    return templates.TemplateResponse(
+        request, "login.html",
+        {"error": error, "no_password": auth.admin_password() is None,
+         "admin": False, "signed_in": False},
+    )
+
+
+@app.post("/admin/login")
+def login(request: Request, password: str = Form("")):
+    if not auth.password_matches(password):
+        return RedirectResponse("/admin/login?error=1", status_code=303)
+    resp = RedirectResponse("/admin", status_code=303)
+    resp.set_cookie(
+        auth.COOKIE, auth.make_token(),
+        max_age=auth.SESSION_TTL, httponly=True, samesite="lax",
+        secure=request.url.scheme == "https",
+    )
+    return resp
+
+
+@app.post("/admin/logout")
+def logout():
+    resp = RedirectResponse("/", status_code=303)
+    resp.delete_cookie(auth.COOKIE)
+    return resp
+
+
+@app.get("/admin", response_class=HTMLResponse)
+def admin(request: Request):
+    if not auth.is_admin(request):
+        return RedirectResponse("/admin/login", status_code=303)
+    return _render_library(request, admin_mode=True)
+
+
+@app.post("/episode/{episode_id}/publish")
+def set_published(request: Request, episode_id: str,
+                  published: str = Form("1"), reviewed: str = Form("")):
+    require_admin(request)
+    row = db.get_episode(episode_id)
+    if not row:
+        raise HTTPException(404, "no such episode")
+
+    if reviewed:
+        db.update_episode(episode_id, flags_reviewed=1)
+        row = db.get_episode(episode_id)
+
+    want = published == "1"
+    if want:
+        blocker = publish_blocker(row)
+        if blocker:
+            raise HTTPException(400, f"cannot publish: {blocker}")
+    db.update_episode(episode_id, published=1 if want else 0)
+    return RedirectResponse(f"/episode/{episode_id}", status_code=303)
+
+
 @app.get("/", response_class=HTMLResponse)
 def library(request: Request):
-    all_episodes = [_episode_view(r) for r in db.list_episodes()]
+    return _render_library(request, admin_mode=False)
+
+
+def _render_library(request: Request, admin_mode: bool):
+    all_episodes = [
+        _episode_view(r) for r in db.list_episodes(published_only=not admin_mode)
+    ]
     # Failures are moved out of the reading list: they are maintenance, not
     # something to browse. They stay reachable, collapsed, below the fold.
     episodes = [e for e in all_episodes if e["status"] != "failed"]
-    failed = [{**e, "short_error": _short_error(e["error"])}
-              for e in all_episodes if e["status"] == "failed"]
+    failed = ([{**e, "short_error": _short_error(e["error"])}
+               for e in all_episodes if e["status"] == "failed"]
+              if admin_mode else [])
     return templates.TemplateResponse(
         request,
         "library.html",
         {
             "episodes": episodes,
             "failed": failed,
+            "admin": admin_mode,
+            "signed_in": auth.is_admin(request),
             "total_cost": sum(e["cost_usd"] for e in all_episodes),
             "feed_url": CFG["server"]["base_url"].rstrip("/") + "/feed.xml",
             "feed_title": CFG.get("feed", {}).get("title", "Paperpod"),
@@ -386,7 +483,8 @@ def library(request: Request):
 
 
 @app.post("/upload")
-async def upload(file: UploadFile):
+async def upload(request: Request, file: UploadFile):
+    require_admin(request)
     if not (file.filename or "").lower().endswith(".pdf"):
         raise HTTPException(400, "only .pdf files are accepted")
     staged = INBOX_DIR / f"upload-{db.new_ulid()}.pdf"
@@ -407,15 +505,23 @@ def episode_page(request: Request, episode_id: str):
     row = db.get_episode(episode_id)
     if not row:
         raise HTTPException(404, "no such episode")
+    admin_mode = auth.is_admin(request)
+    # An unpublished episode does not exist as far as the public is concerned.
+    if not admin_mode and not (row["published"] and row["status"] == "done"):
+        raise HTTPException(404, "no such episode")
+
     view = _episode_view(row)
     return templates.TemplateResponse(
         request,
         "episode.html",
         {
             "ep": view,
+            "admin": admin_mode,
+            "signed_in": admin_mode,
             "lines": _script_lines(row["script_md"], view["flags"]) if row["script_md"] else [],
-            "stages": db.get_stage_log(episode_id),
+            "stages": db.get_stage_log(episode_id) if admin_mode else [],
             "retry_stages": run.STAGE_NAMES,
+            "publish_blocker": publish_blocker(row) if admin_mode else None,
         },
     )
 
@@ -424,6 +530,8 @@ def episode_page(request: Request, episode_id: str):
 def episode_audio(episode_id: str, request: Request):
     row = db.get_episode(episode_id)
     if not row or not row["audio_path"]:
+        raise HTTPException(404, "no audio for this episode")
+    if not auth.is_admin(request) and not row["published"]:
         raise HTTPException(404, "no audio for this episode")
     path = Path(row["audio_path"])
     if not path.exists():
@@ -485,7 +593,8 @@ def _ranged_file(path: Path, request: Request, media_type: str) -> Response:
 
 
 @app.post("/episode/{episode_id}/retry")
-def retry(episode_id: str, stage: str = Form("extracting")):
+def retry(request: Request, episode_id: str, stage: str = Form("extracting")):
+    require_admin(request)
     row = db.get_episode(episode_id)
     if not row:
         raise HTTPException(404, "no such episode")
@@ -497,7 +606,8 @@ def retry(episode_id: str, stage: str = Form("extracting")):
 
 
 @app.delete("/episode/{episode_id}")
-def delete_episode(episode_id: str):
+def delete_episode(request: Request, episode_id: str):
+    require_admin(request)
     row = db.get_episode(episode_id)
     if not row:
         raise HTTPException(404, "no such episode")
@@ -509,7 +619,8 @@ def delete_episode(episode_id: str):
 
 
 @app.get("/health")
-def health():
+def health(request: Request):
+    require_admin(request)
     return {
         "queue_depth": WORK_Q.qsize(),
         "worker_alive": WORKER_STATE["alive"],
@@ -528,8 +639,8 @@ def feed():
     base = CFG["server"]["base_url"].rstrip("/")
     fcfg = CFG.get("feed", {})
     items = []
-    for row in db.list_episodes():
-        if row["status"] != "done" or not row["audio_path"]:
+    for row in db.list_episodes(published_only=True):
+        if not row["audio_path"]:
             continue
         path = Path(row["audio_path"])
         if not path.exists():
