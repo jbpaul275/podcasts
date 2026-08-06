@@ -1,0 +1,62 @@
+[models]
+metadata = "gemini-3-flash-preview"
+script   = "gemini-3-pro-preview"
+tts      = "gemini-3.1-flash-tts-preview"
+
+[voices]
+host_a = "Puck"
+host_b = "Kore"
+
+[script]
+target_words = 1600
+max_pages    = 120
+
+[tts]
+# Chunk size in words. Split only on speaker-turn boundaries.
+chunk_target_words = 250
+chunk_max_words    = 320
+# How many preceding turns to include as (unspoken) context for prosody.
+context_turns      = 2
+
+[retry]
+# Transient API failures (429 rate limits, 5xx) are retried on the server's
+# own schedule when it supplies one -- Gemini's 429s often ask for 10-30s,
+# well past what plain exponential backoff would wait.
+attempts     = 4
+base_delay_s = 2
+max_delay_s  = 60
+
+[audio]
+seam_silence_ms = 250
+lufs_target     = -16.0
+true_peak       = -1.5
+lra             = 11.0
+bitrate         = "96k"
+
+[server]
+base_url = "http://localhost:8000"
+port     = 8000
+
+[feed]
+title       = "Paperpod"
+description = "AI Generated Podcast Discussions of Important Papers."
+author      = "Paperpod"
+
+[site]
+# Shown on the terms page and used as the podcast owner contact in the feed.
+owner_name    = "Josh Paul"
+contact_email = "jbpaul275@gmail.com"
+
+# USD per 1M tokens. TTS prices are the documented preview prices; the two
+# text-model prices are estimates -- verify against current Gemini pricing.
+[costs."gemini-3-flash-preview"]
+input_per_1m  = 0.30
+output_per_1m = 2.50
+
+[costs."gemini-3-pro-preview"]
+input_per_1m  = 2.00
+output_per_1m = 12.00
+
+[costs."gemini-3.1-flash-tts-preview"]
+input_per_1m  = 1.00
+output_per_1m = 20.00

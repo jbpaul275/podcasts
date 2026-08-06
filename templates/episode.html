@@ -1,0 +1,188 @@
+{% extends "base.html" %}
+{% block title %}{{ ep.title }} — Paperpod{% endblock %}
+{% block content %}
+
+<article class="episode" data-episode="{{ ep.id }}" data-status="{{ ep.status }}">
+  <h1>{{ ep.title }}</h1>
+  <p class="attribution">{{ ep.attribution }}</p>
+  <p class="authors">
+    {%- if ep.year %}{{ ep.year }}{% endif %}{% if ep.venue %}{% if ep.year %} · {% endif %}{{ ep.venue }}{% endif %}
+  </p>
+  <p class="meta">
+    {% if admin %}<span class="status status-{{ ep.status }}">{{ ep.status }}</span>{% endif %}
+    {% if ep.has_audio %}<span>{{ ep.duration }}</span>{% endif %}
+    {% if admin %}<span class="cost">${{ '%.4f'|format(ep.cost_usd) }} API cost</span>{% endif %}
+  </p>
+
+  {% if admin and ep.error %}<p class="error">{{ ep.error }}</p>{% endif %}
+
+  {% if admin and gaps %}
+    <section class="gapwarn">
+      <h2>Audio is incomplete</h2>
+      {% for g in gaps %}<p>{{ g }}</p>{% endfor %}
+    </section>
+  {% endif %}
+
+  {% if ep.summary %}<p class="episodesummary">{{ ep.summary }}</p>{% endif %}
+
+  {% if ep.has_audio %}
+    <audio class="player" controls preload="metadata" src="/episode/{{ ep.id }}/audio"></audio>
+  {% else %}
+    <p class="muted pending">No audio yet — this page refreshes itself while the episode is processing.</p>
+  {% endif %}
+
+  {% if admin and ep.abstract %}
+    <details class="abstract">
+      <summary>Abstract</summary>
+      <p>{{ ep.abstract }}</p>
+    </details>
+  {% endif %}
+
+  {% if admin and ep.flags_unverified %}
+    <section class="flagbox" id="flags">
+      <h2>{{ ep.flags_unverified|length }} citation{{ '' if ep.flags_unverified|length == 1 else 's' }} not found in the paper</h2>
+      <p class="muted">These names or years do not appear in the source PDF. Check each one — this is where fabrications show up.</p>
+      <ul>
+        {% for f in ep.flags_unverified %}<li><code>{{ f.text }}</code> <span class="muted">— {{ f.kind }}, line {{ f.line }}</span></li>{% endfor %}
+      </ul>
+    </section>
+  {% endif %}
+
+  {% if admin and ep.flags_in_paper %}
+    <details class="flagbox verified" {% if not ep.flags_unverified %}id="flags"{% endif %}>
+      <summary>{{ ep.flags_in_paper|length }} citation-shaped string{{ '' if ep.flags_in_paper|length == 1 else 's' }} traced back to the paper</summary>
+      <p class="muted">Found in the source PDF, so not fabricated. Listed for completeness.</p>
+      <ul>
+        {% for f in ep.flags_in_paper %}<li><code>{{ f.text }}</code> <span class="muted">— line {{ f.line }}</span></li>{% endfor %}
+      </ul>
+    </details>
+  {% endif %}
+
+  {% if admin and lines %}
+    <section class="script">
+      <h2>Script</h2>
+      {% for line in lines %}
+        {% set unverified = line.flags|rejectattr('in_paper')|list %}
+        <p class="turn {{ 'host-a' if line.speaker == 'HOST_A' else 'host-b' }}{{ ' flagged' if unverified }}">
+          <span class="who">{{ 'A' if line.speaker == 'HOST_A' else 'B' }}</span>
+          <span class="said">{{ line.text }}</span>
+          {% if unverified %}<span class="inlineflag">⚑ not in paper: {{ unverified|map(attribute='text')|join(' · ') }}</span>{% endif %}
+        </p>
+      {% endfor %}
+    </section>
+  {% endif %}
+
+  {% if admin and ep.cost_breakdown %}
+    <section class="costs">
+      <h2>API cost</h2>
+      <table>
+        {% for c in ep.cost_breakdown %}
+        <tr>
+          <td>{{ c.label }}</td>
+          <td class="num">${{ '%.4f'|format(c.usd) }}</td>
+          <td class="num pct">{{ c.pct }}%</td>
+          <td class="bar"><span style="width: {{ c.pct }}%"></span></td>
+        </tr>
+        {% endfor %}
+        <tr class="total">
+          <td>Total</td>
+          <td class="num">${{ '%.4f'|format(ep.cost_usd) }}</td>
+          <td colspan="2"></td>
+        </tr>
+      </table>
+    </section>
+  {% endif %}
+
+  {% if admin %}
+  <details class="editbox">
+    <summary>Edit title and summary</summary>
+    <form action="/episode/{{ ep.id }}/edit" method="post">
+      <label for="edit-title">Episode title</label>
+      <input id="edit-title" type="text" name="episode_title" maxlength="120"
+             value="{{ ep.episode_title }}"
+             placeholder="{{ ep.paper_title or 'Falls back to the paper title' }}">
+      <p class="hint">Under 60 characters reads best. Leave empty to fall back to the paper's title.</p>
+
+      <label for="edit-summary">Summary</label>
+      <textarea id="edit-summary" name="summary" rows="3"
+                placeholder="Falls back to the first sentences of the abstract">{{ ep.summary }}</textarea>
+      <p class="hint">One or two sentences, around 45 words. Shown on the library, the episode page and in the feed.</p>
+
+      <hr>
+      <p class="hint attribhint">These three build the attribution line. They were read off the PDF by a model, so check them — an error here misnames a real person on a public page.</p>
+
+      <label for="edit-paper-title">Paper title</label>
+      <input id="edit-paper-title" type="text" name="paper_title" value="{{ ep.paper_title }}">
+
+      <label for="edit-authors">Authors</label>
+      <input id="edit-authors" type="text" name="authors" value="{{ ep.authors|join(', ') }}">
+      <p class="hint">Comma separated, in order. Collapses to “First Author et al.” past three.</p>
+
+      <label for="edit-year">Year</label>
+      <input id="edit-year" type="text" name="year" inputmode="numeric" value="{{ ep.year or '' }}">
+
+      <p class="preview"><strong>Preview:</strong> {{ ep.attribution }}</p>
+
+      <button type="submit">Save</button>
+    </form>
+  </details>
+
+  <section class="publish {{ 'is-public' if ep.published else '' }}">
+    <h2>Visibility</h2>
+    {% if ep.published %}
+      <p>Live on the public site and in the feed.</p>
+      <form action="/episode/{{ ep.id }}/publish" method="post">
+        <input type="hidden" name="published" value="0">
+        <button type="submit">Unpublish</button>
+      </form>
+    {% elif publish_blocker %}
+      <p class="blocked">Not publishable yet — {{ publish_blocker }}.</p>
+      {% if publish_blocker == 'citation flags not reviewed' %}
+        <form action="/episode/{{ ep.id }}/publish" method="post">
+          <input type="hidden" name="published" value="1">
+          <input type="hidden" name="reviewed" value="1">
+          <label><input type="checkbox" required>
+            I checked every flagged citation against the paper</label>
+          <button type="submit">Mark reviewed and publish</button>
+        </form>
+      {% endif %}
+    {% else %}
+      <p class="muted">Private. Only you can see this page and its audio.</p>
+      <form action="/episode/{{ ep.id }}/publish" method="post">
+        <input type="hidden" name="published" value="1">
+        <button type="submit">Publish</button>
+      </form>
+    {% endif %}
+  </section>
+
+  <section class="stages">
+    <h2>Stage log</h2>
+    <table>
+      <tr><th>Stage</th><th>Started</th><th>Ended</th><th>OK</th><th>Detail</th></tr>
+      {% for s in stages %}
+      <tr>
+        <td>{{ s.stage }}</td>
+        <td>{{ s.started_at }}</td>
+        <td>{{ s.ended_at or '—' }}</td>
+        <td>{% if s.ended_at is none %}…{% elif s.ok %}✓{% else %}✗{% endif %}</td>
+        <td class="detail">{{ s.detail or '' }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </section>
+
+  <section class="actions">
+    <form action="/episode/{{ ep.id }}/retry" method="post">
+      <label>Re-run from
+        <select name="stage">
+          {% for s in retry_stages %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
+        </select>
+      </label>
+      <button type="submit">Retry</button>
+    </form>
+    <button class="danger delete-episode" data-episode="{{ ep.id }}">Delete episode</button>
+  </section>
+  {% endif %}
+</article>
+
+{% endblock %}

@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}{{ feed_title }}{% endblock %}
+{% block wordmark %}{% endblock %}
+{% block content %}
+
+<div class="libhead">
+  <h1>{{ feed_title }}</h1>
+  <p class="blurb">{{ feed_description }}</p>
+</div>
+
+<ul class="posts">
+{% for ep in episodes %}
+  <li class="post" data-episode="{{ ep.id }}" data-status="{{ ep.status }}">
+    <h2 class="posttitle">
+      {% if ep.has_audio %}
+        <button class="play" type="button"
+                data-src="/episode/{{ ep.id }}/audio"
+                aria-label="Play {{ ep.title }}"><span class="glyph">▶</span></button>
+      {% endif %}
+      <a href="/episode/{{ ep.id }}">{{ ep.title }}</a>
+    </h2>
+
+    <p class="attribution">{{ ep.attribution }}</p>
+
+    {% if ep.summary %}<p class="postsummary">{{ ep.summary }}</p>{% endif %}
+
+    <p class="postmeta">
+      {% if ep.year %}<span>{{ ep.year }}</span>{% endif %}
+      {% if ep.has_audio %}<span>{{ ep.duration }}</span>{% endif %}
+      {% if ep.status != 'done' %}<span class="status status-{{ ep.status }}">{{ ep.status }}</span>{% endif %}
+      {% if admin %}<span class="status status-{{ 'done' if ep.published else 'queued' }}">{{ 'public' if ep.published else 'private' }}</span>{% endif %}
+      {% if admin and ep.flag_count %}<a class="flagcount" href="/episode/{{ ep.id }}#flags">{{ ep.flag_count }} flag{{ '' if ep.flag_count == 1 else 's' }}</a>{% endif %}
+    </p>
+  </li>
+{% endfor %}
+</ul>
+
+{% if not episodes %}
+  <p class="empty">
+    {%- if not admin -%}
+      No episodes published yet.
+    {%- elif failed -%}
+      No finished episodes yet — see the failures below.
+    {%- else -%}
+      Nothing here yet. Drop a paper in below.
+    {%- endif -%}
+  </p>
+{% endif %}
+
+{% if admin and failed %}
+  <details class="failures">
+    <summary>{{ failed|length }} failed</summary>
+    <ul>
+      {% for ep in failed %}
+        <li>
+          <a href="/episode/{{ ep.id }}">{{ ep.title }}</a>
+          <button class="delete-episode linkish" type="button" data-episode="{{ ep.id }}">delete</button>
+          <span class="failreason">{{ ep.short_error }}</span>
+        </li>
+      {% endfor %}
+    </ul>
+  </details>
+{% endif %}
+
+{% if admin %}
+<details class="addpaper">
+  <summary>Add a paper</summary>
+  <form class="dropzone" id="dropzone" action="/upload" method="post" enctype="multipart/form-data">
+    <input type="file" name="file" id="fileinput" accept="application/pdf" hidden>
+    <p><strong>Drop a PDF here</strong> or <button type="button" id="pickfile">choose a file</button></p>
+    <p class="muted">Or copy one into <code>data/inbox/</code> — it gets picked up automatically.</p>
+  </form>
+  <p class="muted libstats">
+    {{ episodes|length }} episode{{ '' if episodes|length == 1 else 's' }} ·
+    ${{ '%.3f'|format(total_cost) }} total API cost ·
+    <a href="/feed.xml">feed.xml</a> <span class="feedurl">({{ feed_url }})</span>
+  </p>
+</details>
+{% endif %}
+
+<audio id="miniplayer" preload="none"></audio>
+
+{% endblock %}

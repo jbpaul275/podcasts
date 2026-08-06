@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Paperpod{% endblock %}</title>
+  <link rel="icon" href="/static/cover.png">
+  <link rel="stylesheet" href="{{ static_url('style.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    {% block wordmark %}<a class="wordmark" href="/">← Library</a>{% endblock %}
+    {% if signed_in %}<span class="health" id="health">&nbsp;</span>{% endif %}
+    {% if signed_in %}
+      <a class="adminlink" href="/admin">Admin</a>
+      <form class="logout" action="/admin/logout" method="post"><button type="submit">Sign out</button></form>
+    {% endif %}
+  </header>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="sitefoot">
+    <a href="/terms">Terms &amp; disclaimer</a>
+    <span>Episodes are AI-generated and may contain errors.</span>
+  </footer>
+  <script src="{{ static_url('app.js') }}"></script>
+</body>
+</html>

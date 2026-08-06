@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Sign in — Paperpod{% endblock %}
+{% block wordmark %}{% endblock %}
+{% block content %}
+
+<div class="loginbox">
+  <h1>Admin</h1>
+  {% if error %}<p class="error">Wrong password.</p>{% endif %}
+  {% if no_password %}
+    <p class="muted">
+      No <code>PAPERPOD_ADMIN_PASSWORD</code> is set, so the admin surface is
+      reachable from this machine only. Set it before deploying anywhere public.
+    </p>
+  {% endif %}
+  <form method="post" action="/admin/login">
+    <input type="password" name="password" placeholder="Password" autofocus
+           autocomplete="current-password">
+    <button type="submit">Sign in</button>
+  </form>
+</div>
+
+{% endblock %}
