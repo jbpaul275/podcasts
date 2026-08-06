@@ -75,6 +75,13 @@
   <form class="dropzone" id="dropzone" action="/upload" method="post" enctype="multipart/form-data">
     <input type="file" name="file" id="fileinput" accept="application/pdf" hidden>
     <p><strong>Drop a PDF</strong><br>or <button type="button" id="pickfile">choose a file</button></p>
+    {% if tts_choices|length > 1 %}
+      <label class="ttspick">Voice model
+        <select name="tts_model" id="ttspick">
+          {% for m in tts_choices %}<option value="{{ m }}">{{ m }}</option>{% endfor %}
+        </select>
+      </label>
+    {% endif %}
   </form>
 
   <section class="queue" id="queue" data-count="{{ queue|length }}">
@@ -98,7 +105,8 @@
   <p class="sidestats">
     {{ episodes|length }} episode{{ '' if episodes|length == 1 else 's' }}<br>
     ${{ '%.3f'|format(total_cost) }} API cost<br>
-    <a href="/feed.xml">feed.xml</a>
+    <a href="/feed.xml">feed.xml</a><br>
+    <a href="/admin/models">available models</a>
   </p>
 </aside>
 {% endif %}

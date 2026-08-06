@@ -133,6 +133,53 @@
     </form>
   </details>
 
+  {% if versions %}
+    <section class="versions">
+      <h2>{{ versions|length }} renderings of this paper</h2>
+      <p class="muted">Same paper, different voice models. Publishing one makes it the
+        canonical version and unpublishes the others, so the public site and the feed
+        always link to exactly one.</p>
+      <table>
+        <tr><th>Voice model</th><th>Built</th><th>Length</th><th>Cost</th><th></th></tr>
+        {% for v in versions %}
+          <tr class="{{ 'current' if v.id == ep.id }}{{ ' live' if v.published }}">
+            <td><code>{{ v.tts_model }}</code></td>
+            <td class="muted">{{ v.audio_built_at or '—' }}</td>
+            <td>{{ v.duration if v.has_audio else '—' }}</td>
+            <td class="num">${{ '%.3f'|format(v.cost_usd) }}</td>
+            <td>
+              {% if v.published %}<span class="status status-done">public</span>
+              {% elif v.id == ep.id %}<span class="muted">this page</span>
+              {% else %}<a href="/episode/{{ v.id }}">open</a>{% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </table>
+    </section>
+  {% endif %}
+
+  <section class="ttsbox">
+    <h2>Voice model</h2>
+    <p><code>{{ ep.tts_model }}</code>{% if not ep.tts_model_pinned %}
+      <span class="muted">(config default)</span>{% endif %}
+      {% if ep.audio_built_at %}<br><span class="muted">audio built {{ ep.audio_built_at }}</span>{% endif %}</p>
+    {% if ep.script_md_present and tts_choices|length > 1 %}
+      <form action="/episode/{{ ep.id }}/clone" method="post">
+        <label>Re-voice this script with
+          <select name="tts_model">
+            {% for m in tts_choices %}
+              <option value="{{ m }}"{{ ' selected' if m != ep.tts_model }}>{{ m }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <button type="submit">Create comparison episode</button>
+      </form>
+      <p class="hint">Copies this episode's script to a new episode and synthesizes it
+        with the chosen model. Same words, different voice — so the comparison is
+        about the model, not the paper. Costs one episode of TTS.</p>
+    {% endif %}
+  </section>
+
   <section class="publish {{ 'is-public' if ep.published else '' }}">
     <h2>Visibility</h2>
     {% if ep.published %}

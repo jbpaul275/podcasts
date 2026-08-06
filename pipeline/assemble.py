@@ -119,7 +119,8 @@ def assemble(episode_id: str, cfg: dict) -> None:
     _run(cmd)
 
     duration = _probe_duration(out_path)
-    db.update_episode(episode_id, audio_path=str(out_path), duration_s=duration)
+    db.update_episode(episode_id, audio_path=str(out_path), duration_s=duration,
+                      audio_built_at=db.now_iso())
 
     if missing:
         db.stage_start(episode_id, "assembling:gaps")

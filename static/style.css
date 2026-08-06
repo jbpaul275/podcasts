@@ -268,3 +268,28 @@ button, select { font: inherit; font-size: 0.9rem; padding: 0.35rem 0.7rem; bord
   .status-queued { background: #23262c; }
   .status-extracting, .status-scripting, .status-synthesizing, .status-assembling { background: #2c2519; color: #e0a458; }
 }
+
+/* model picker and comparison */
+.ttspick { display: block; margin-top: 0.8rem; font-size: 0.78rem; color: var(--muted); }
+.ttspick select { width: 100%; margin-top: 0.3rem; font-size: 0.8rem; }
+.ttsbox { border: 1px solid var(--rule); border-radius: 8px; padding: 0.9rem 1.1rem; margin-top: 1rem; }
+.ttsbox h2 { margin: 0 0 0.4rem; }
+.ttsbox p { margin: 0 0 0.7rem; font-size: 0.9rem; }
+.ttsbox .hint { font-size: 0.78rem; color: var(--muted); margin: 0.6rem 0 0; line-height: 1.5; }
+.ttsbox label { font-size: 0.85rem; }
+.modeltable { width: 100%; border-collapse: collapse; font-size: 0.85rem; margin-bottom: 1rem; }
+.modeltable td, .modeltable th { padding: 0.35rem 0.6rem 0.35rem 0; border-bottom: 1px solid var(--rule); text-align: left; vertical-align: top; }
+.modeltable tr.tts { background: #f2f7fc; }
+@media (prefers-color-scheme: dark) { .modeltable tr.tts { background: #1a222b; } }
+ul.plain { list-style: none; padding: 0; margin: 0 0 0.5rem; }
+
+/* alternate renderings of one paper */
+.versions { border: 1px solid var(--rule); border-radius: 8px; padding: 0.9rem 1.1rem; margin-top: 2.5rem; }
+.versions h2 { margin: 0 0 0.35rem; }
+.versions p { margin: 0 0 0.8rem; }
+.versions table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+.versions th { text-align: left; color: var(--muted); font-weight: 600; padding: 0.3rem 0.6rem 0.3rem 0; border-bottom: 1px solid var(--rule); }
+.versions td { padding: 0.4rem 0.6rem 0.4rem 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+.versions tr:last-child td { border-bottom: none; }
+.versions tr.current td { font-weight: 600; }
+.versions .num { text-align: right; font-variant-numeric: tabular-nums; }
