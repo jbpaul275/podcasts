@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block content %}
+
+<form class="dropzone" id="dropzone" action="/upload" method="post" enctype="multipart/form-data">
+  <input type="file" name="file" id="fileinput" accept="application/pdf" hidden>
+  <p><strong>Drop a PDF here</strong> or <button type="button" id="pickfile">choose a file</button></p>
+  <p class="muted">Or copy one into <code>data/inbox/</code> — it gets picked up automatically.</p>
+</form>
+
+<div class="libhead">
+  <h1>Library</h1>
+  <p class="muted">
+    {{ episodes|length }} episode{{ '' if episodes|length == 1 else 's' }} ·
+    ${{ '%.3f'|format(total_cost) }} total API cost ·
+    <a href="/feed.xml">feed.xml</a> <span class="feedurl">({{ feed_url }})</span>
+  </p>
+</div>
+
+{% if not episodes %}
+  <p class="empty">Nothing here yet. Drop a paper in.</p>
+{% endif %}
+
+<ul class="cards">
+{% for ep in episodes %}
+  <li class="card" data-episode="{{ ep.id }}" data-status="{{ ep.status }}">
+    <a class="cardtitle" href="/episode/{{ ep.id }}">{{ ep.title }}</a>
+    <p class="authors">
+      {{ ep.authors|join(', ') if ep.authors else 'Unknown authors' }}{% if ep.year %} · {{ ep.year }}{% endif %}
+    </p>
+    <p class="meta">
+      <span class="status status-{{ ep.status }}">{{ ep.status }}</span>
+      {% if ep.has_audio %}<span>{{ ep.duration }}</span>{% endif %}
+      {% if ep.flag_count %}<span class="flagcount">{{ ep.flag_count }} flag{{ '' if ep.flag_count == 1 else 's' }}</span>{% endif %}
+      {% if ep.cost_usd %}<span class="cost">${{ '%.3f'|format(ep.cost_usd) }}</span>{% endif %}
+    </p>
+    {% if ep.error %}<p class="error">{{ ep.error }}</p>{% endif %}
+    {% if ep.has_audio %}
+      <audio controls preload="none" src="/episode/{{ ep.id }}/audio"></audio>
+    {% endif %}
+  </li>
+{% endfor %}
+</ul>
+
+{% endblock %}

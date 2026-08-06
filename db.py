@@ -1,0 +1,162 @@
+"""SQLite schema and queries. sqlite3 stdlib, no ORM, one connection per thread."""
+
+import json
+import os
+import sqlite3
+import threading
+import time
+from datetime import datetime, timezone
+
+from config import DATA_DIR
+
+DB_PATH = DATA_DIR / "paperpod.db"
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS episode (
+  id            TEXT PRIMARY KEY,   -- ulid
+  created_at    TEXT NOT NULL,
+  source_path   TEXT NOT NULL,
+  sha256        TEXT,               -- content hash, dedupe key
+  title         TEXT,
+  authors       TEXT,               -- JSON array
+  year          INTEGER,
+  abstract      TEXT,
+  venue         TEXT,
+  status        TEXT NOT NULL,      -- queued|extracting|scripting|synthesizing|assembling|done|failed
+  script_md     TEXT,
+  audio_path    TEXT,
+  duration_s    REAL,
+  error         TEXT,
+  cost_usd      REAL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_episode_sha ON episode(sha256);
+
+CREATE TABLE IF NOT EXISTS stage_log (
+  episode_id TEXT NOT NULL,
+  stage      TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  ended_at   TEXT,
+  ok         INTEGER,
+  detail     TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_stage_log_episode ON stage_log(episode_id);
+"""
+
+_local = threading.local()
+
+_ULID_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"  # Crockford base32
+
+
+def new_ulid() -> str:
+    val = (int(time.time() * 1000) << 80) | int.from_bytes(os.urandom(10), "big")
+    return "".join(_ULID_ALPHABET[(val >> (5 * i)) & 31] for i in range(25, -1, -1))
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def get_conn() -> sqlite3.Connection:
+    conn = getattr(_local, "conn", None)
+    if conn is None:
+        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(DB_PATH, timeout=30)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA foreign_keys=ON")
+        _local.conn = conn
+    return conn
+
+
+def init_db() -> None:
+    get_conn().executescript(SCHEMA)
+
+
+# ---- episode ----
+
+def create_episode(id: str, source_path: str, sha256: str | None,
+                   status: str = "queued", error: str | None = None) -> None:
+    conn = get_conn()
+    conn.execute(
+        "INSERT INTO episode (id, created_at, source_path, sha256, status, error)"
+        " VALUES (?, ?, ?, ?, ?, ?)",
+        (id, now_iso(), source_path, sha256, status, error),
+    )
+    conn.commit()
+
+
+def get_episode(id: str) -> sqlite3.Row | None:
+    return get_conn().execute("SELECT * FROM episode WHERE id = ?", (id,)).fetchone()
+
+
+def list_episodes() -> list[sqlite3.Row]:
+    return get_conn().execute(
+        "SELECT * FROM episode ORDER BY created_at DESC, id DESC"
+    ).fetchall()
+
+
+def find_by_sha(sha256: str) -> sqlite3.Row | None:
+    return get_conn().execute(
+        "SELECT * FROM episode WHERE sha256 = ?", (sha256,)
+    ).fetchone()
+
+
+def update_episode(id: str, **fields) -> None:
+    if not fields:
+        return
+    conn = get_conn()
+    cols = ", ".join(f"{k} = ?" for k in fields)
+    conn.execute(f"UPDATE episode SET {cols} WHERE id = ?", (*fields.values(), id))
+    conn.commit()
+
+
+def add_cost(id: str, usd: float) -> None:
+    conn = get_conn()
+    conn.execute(
+        "UPDATE episode SET cost_usd = COALESCE(cost_usd, 0) + ? WHERE id = ?",
+        (usd, id),
+    )
+    conn.commit()
+
+
+def delete_episode(id: str) -> None:
+    conn = get_conn()
+    conn.execute("DELETE FROM episode WHERE id = ?", (id,))
+    conn.execute("DELETE FROM stage_log WHERE episode_id = ?", (id,))
+    conn.commit()
+
+
+def episode_authors(row: sqlite3.Row) -> list[str]:
+    try:
+        return json.loads(row["authors"]) if row["authors"] else []
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+
+# ---- stage log ----
+
+def stage_start(episode_id: str, stage: str) -> None:
+    conn = get_conn()
+    conn.execute(
+        "INSERT INTO stage_log (episode_id, stage, started_at) VALUES (?, ?, ?)",
+        (episode_id, stage, now_iso()),
+    )
+    conn.commit()
+
+
+def stage_end(episode_id: str, stage: str, ok: bool, detail: str = "") -> None:
+    conn = get_conn()
+    conn.execute(
+        "UPDATE stage_log SET ended_at = ?, ok = ?, detail = ?"
+        " WHERE rowid = (SELECT MAX(rowid) FROM stage_log"
+        "                WHERE episode_id = ? AND stage = ? AND ended_at IS NULL)",
+        (now_iso(), 1 if ok else 0, detail, episode_id, stage),
+    )
+    conn.commit()
+
+
+def get_stage_log(episode_id: str) -> list[sqlite3.Row]:
+    return get_conn().execute(
+        "SELECT * FROM stage_log WHERE episode_id = ? ORDER BY rowid",
+        (episode_id,),
+    ).fetchall()

@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}{{ ep.title }} — Paperpod{% endblock %}
+{% block content %}
+
+<article class="episode" data-episode="{{ ep.id }}" data-status="{{ ep.status }}">
+  <h1>{{ ep.title }}</h1>
+  <p class="authors">
+    {{ ep.authors|join(', ') if ep.authors else 'Unknown authors' }}{% if ep.year %} · {{ ep.year }}{% endif %}{% if ep.venue %} · {{ ep.venue }}{% endif %}
+  </p>
+  <p class="meta">
+    <span class="status status-{{ ep.status }}">{{ ep.status }}</span>
+    {% if ep.has_audio %}<span>{{ ep.duration }}</span>{% endif %}
+    <span class="cost">${{ '%.4f'|format(ep.cost_usd) }} API cost</span>
+  </p>
+
+  {% if ep.error %}<p class="error">{{ ep.error }}</p>{% endif %}
+
+  {% if ep.has_audio %}
+    <audio class="player" controls preload="metadata" src="/episode/{{ ep.id }}/audio"></audio>
+  {% else %}
+    <p class="muted pending">No audio yet — this page refreshes itself while the episode is processing.</p>
+  {% endif %}
+
+  {% if ep.abstract %}
+    <details class="abstract">
+      <summary>Abstract</summary>
+      <p>{{ ep.abstract }}</p>
+    </details>
+  {% endif %}
+
+  {% if ep.flags %}
+    <section class="flagbox">
+      <h2>{{ ep.flags|length }} citation-shaped string{{ '' if ep.flags|length == 1 else 's' }} flagged</h2>
+      <p class="muted">Check each against the paper. The model was told not to invent citations, but this is where fabrications show up.</p>
+      <ul>
+        {% for f in ep.flags %}<li><code>{{ f.text }}</code> <span class="muted">— {{ f.kind }}, line {{ f.line }}</span></li>{% endfor %}
+      </ul>
+    </section>
+  {% endif %}
+
+  {% if lines %}
+    <section class="script">
+      <h2>Script</h2>
+      {% for line in lines %}
+        <p class="turn {{ 'host-a' if line.speaker == 'HOST_A' else 'host-b' }}{{ ' flagged' if line.flags }}">
+          <span class="who">{{ 'A' if line.speaker == 'HOST_A' else 'B' }}</span>
+          <span class="said">{{ line.text }}</span>
+          {% if line.flags %}<span class="inlineflag">⚑ {{ line.flags|map(attribute='text')|join(' · ') }}</span>{% endif %}
+        </p>
+      {% endfor %}
+    </section>
+  {% endif %}
+
+  <section class="stages">
+    <h2>Stage log</h2>
+    <table>
+      <tr><th>Stage</th><th>Started</th><th>Ended</th><th>OK</th><th>Detail</th></tr>
+      {% for s in stages %}
+      <tr>
+        <td>{{ s.stage }}</td>
+        <td>{{ s.started_at }}</td>
+        <td>{{ s.ended_at or '—' }}</td>
+        <td>{% if s.ended_at is none %}…{% elif s.ok %}✓{% else %}✗{% endif %}</td>
+        <td class="detail">{{ s.detail or '' }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </section>
+
+  <section class="actions">
+    <form action="/episode/{{ ep.id }}/retry" method="post">
+      <label>Re-run from
+        <select name="stage">
+          {% for s in retry_stages %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
+        </select>
+      </label>
+      <button type="submit">Retry</button>
+    </form>
+    <button class="danger" id="delete-episode" data-episode="{{ ep.id }}">Delete episode</button>
+  </section>
+</article>
+
+{% endblock %}
