@@ -94,17 +94,21 @@ Confirmed in use:
 
 Three, all callable through `generateContent` with an audio response:
 
-| Model | Character |
-|---|---|
-| `gemini-3.1-flash-tts-preview` | Expressive, audio tags, highest cost |
-| `gemini-2.5-pro-preview-tts` | High fidelity, aimed at podcasts and audiobooks |
-| `gemini-2.5-flash-preview-tts` | Fastest and cheapest |
+| Model | Character | Output rate |
+|---|---|---|
+| `gemini-3.1-flash-tts-preview` | Expressive, audio tags | $20 / 1M tokens |
+| `gemini-2.5-pro-preview-tts` | High fidelity, aimed at podcasts and audiobooks | $20 / 1M tokens |
+| `gemini-2.5-flash-preview-tts` | Fastest, half the output rate | $10 / 1M tokens |
+
+Input is $1 / 1M tokens for all three, and is a rounding error — audio output is
+roughly 97% of an episode's cost. So 3.1 Flash and 2.5 Pro cost the same and the
+choice between them is purely which sounds better; 2.5 Flash is about half price.
 
 **The Live models are not usable here.** `gemini-3.1-flash-live-preview` and `gemini-2.5-flash-native-audio-preview-12-2025` are bidirectional streaming models for real-time dialogue, reached through the Live API rather than `generateContent`. Putting one in `[tts] models` would fail every chunk.
 
 Visit `/admin/models` to see what your key can actually call — hardcoded IDs go stale, and a wrong one 404s an entire episode before anything surfaces.
 
-The prices in `[costs]` for the two 2.5 TTS models are estimates. **Every model in the picker needs a `[costs]` entry**, or its spend is reported as $0.00; the app logs a warning at startup for any that are missing.
+**Every model in the picker needs a `[costs]` entry**, or its spend is reported as $0.00; the app logs a warning at startup for any that are missing.
 
 The prices in `[costs]` are documented for TTS and **estimates for the two text models** — correct them against current Gemini pricing so the per-episode cost figure means something.
 
