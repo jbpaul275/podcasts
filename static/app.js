@@ -3,12 +3,28 @@
 (function () {
   const WORKING = ["queued", "extracting", "scripting", "synthesizing", "assembling"];
 
+  // True while the native file dialog is open. A reload during that window
+  // destroys the <input> the dialog is bound to, so the file the user finally
+  // picks arrives at a detached element and the upload silently never happens.
+  let pickingFile = false;
+
   // ---- drag and drop upload ----
   const zone = document.getElementById("dropzone");
   if (zone) {
     const input = document.getElementById("fileinput");
-    document.getElementById("pickfile").addEventListener("click", () => input.click());
-    input.addEventListener("change", () => { if (input.files.length) zone.submit(); });
+    document.getElementById("pickfile").addEventListener("click", () => {
+      pickingFile = true;
+      input.click();
+    });
+    input.addEventListener("change", () => {
+      pickingFile = false;
+      if (input.files.length) zone.submit();
+    });
+    // Cancelling the dialog fires no change event; focus returning to the
+    // window is the only signal that it closed.
+    window.addEventListener("focus", () => {
+      setTimeout(() => { pickingFile = false; }, 500);
+    });
 
     ["dragenter", "dragover"].forEach((ev) =>
       zone.addEventListener(ev, (e) => { e.preventDefault(); zone.classList.add("over"); })
@@ -109,9 +125,10 @@
   // Never reload out from under someone who is editing: a refresh collapses
   // open forms and discards whatever they had typed.
   function busyEditing() {
+    if (pickingFile) return true;
     if (document.querySelector("details.editbox[open], details.addpaper[open]")) return true;
     const el = document.activeElement;
-    return Boolean(el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName));
+    return Boolean(el && /^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(el.tagName));
   }
 
   const queueEl = document.getElementById("queue");
