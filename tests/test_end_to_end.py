@@ -992,6 +992,67 @@ def test_cannot_publish_an_unfinished_episode(public_client, env, tmp_path):
     assert "not done" in resp.text
 
 
+def test_admin_can_edit_title_and_summary(public_client, env, tmp_path):
+    import db
+
+    public_client.post("/admin/login", data={"password": "hunter2"})
+    eid = _episode(env, tmp_path, title="The Original Paper Title", status="done",
+                   published=1, episode_title="Machine title", summary="Machine summary.")
+
+    resp = public_client.post(f"/episode/{eid}/edit", data={
+        "episode_title": "  A better hand-written title  ",
+        "summary": "A sharper summary,\n  written by a person.",
+    }, follow_redirects=False)
+    assert resp.status_code == 303
+
+    row = db.get_episode(eid)
+    assert row["episode_title"] == "A better hand-written title", "whitespace collapsed"
+    assert row["summary"] == "A sharper summary, written by a person."
+
+    public = public_client.get("/").text
+    assert "A better hand-written title" in public
+    assert "A sharper summary, written by a person." in public
+    assert "Machine title" not in public
+
+
+def test_clearing_an_edited_field_restores_the_fallback(public_client, env, tmp_path):
+    import db
+
+    public_client.post("/admin/login", data={"password": "hunter2"})
+    eid = _episode(env, tmp_path, title="The Original Paper Title", status="done",
+                   published=1, episode_title="Machine title",
+                   abstract="First sentence of the abstract. Second one here. Third.")
+
+    public_client.post(f"/episode/{eid}/edit", data={"episode_title": "", "summary": ""})
+
+    row = db.get_episode(eid)
+    assert row["episode_title"] is None and row["summary"] is None
+    html = public_client.get("/").text
+    assert "The Original Paper Title" in html, "falls back to the paper title"
+    assert "First sentence of the abstract." in html, "falls back to the abstract"
+
+
+def test_edit_is_admin_only(public_client, env, tmp_path):
+    import db
+
+    eid = _episode(env, tmp_path, title="Live One", status="done", published=1,
+                   episode_title="Untouched")
+    assert public_client.post(f"/episode/{eid}/edit",
+                              data={"episode_title": "Hacked"}).status_code == 401
+    assert db.get_episode(eid)["episode_title"] == "Untouched"
+
+
+def test_edit_form_prefills_the_stored_title_not_the_fallback(public_client, env, tmp_path):
+    """An empty episode title must not prefill with the paper's title, or
+    saving would silently promote it."""
+    public_client.post("/admin/login", data={"password": "hunter2"})
+    eid = _episode(env, tmp_path, title="The Original Paper Title", status="done")
+
+    html = " ".join(public_client.get(f"/episode/{eid}").text.split())
+    assert 'name="episode_title" maxlength="120" value=""' in html, "no stored title"
+    assert 'placeholder="The Original Paper Title"' in html, "fallback shown as a hint"
+
+
 def test_terms_page_is_public_and_carries_the_disclosures(public_client, env, monkeypatch):
     import app as app_mod
 

@@ -87,6 +87,24 @@
   {% endif %}
 
   {% if admin %}
+  <details class="editbox">
+    <summary>Edit title and summary</summary>
+    <form action="/episode/{{ ep.id }}/edit" method="post">
+      <label for="edit-title">Episode title</label>
+      <input id="edit-title" type="text" name="episode_title" maxlength="120"
+             value="{{ ep.episode_title }}"
+             placeholder="{{ ep.paper_title or 'Falls back to the paper title' }}">
+      <p class="hint">Under 60 characters reads best. Leave empty to fall back to the paper's title.</p>
+
+      <label for="edit-summary">Summary</label>
+      <textarea id="edit-summary" name="summary" rows="3"
+                placeholder="Falls back to the first sentences of the abstract">{{ ep.summary }}</textarea>
+      <p class="hint">One or two sentences, around 45 words. Shown on the library, the episode page and in the feed.</p>
+
+      <button type="submit">Save</button>
+    </form>
+  </details>
+
   <section class="publish {{ 'is-public' if ep.published else '' }}">
     <h2>Visibility</h2>
     {% if ep.published %}

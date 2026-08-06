@@ -184,7 +184,18 @@ audio { width: 100%; margin-top: 0.85rem; }
 .loginbox form { display: flex; gap: 0.5rem; margin-top: 1rem; }
 .loginbox input { flex: 1; font: inherit; font-size: 0.95rem; padding: 0.4rem 0.6rem; border: 1px solid var(--rule); border-radius: 6px; background: var(--card); color: var(--ink); }
 
-.publish { border: 1px solid var(--rule); border-radius: 8px; padding: 0.9rem 1.1rem; margin-top: 2.5rem; }
+.editbox { border: 1px solid var(--rule); border-radius: 8px; padding: 0.9rem 1.1rem; margin-top: 2.5rem; }
+.editbox summary { cursor: pointer; color: var(--muted); font-size: 0.9rem; }
+.editbox form { margin-top: 1rem; }
+.editbox label { display: block; font-size: 0.8rem; font-weight: 600; margin-bottom: 0.3rem; }
+.editbox input, .editbox textarea {
+  width: 100%; font: inherit; font-size: 0.95rem; padding: 0.45rem 0.6rem;
+  border: 1px solid var(--rule); border-radius: 6px; background: var(--bg); color: var(--ink);
+  line-height: 1.5; resize: vertical;
+}
+.editbox .hint { font-size: 0.78rem; color: var(--muted); margin: 0.3rem 0 1.1rem; }
+
+.publish { border: 1px solid var(--rule); border-radius: 8px; padding: 0.9rem 1.1rem; margin-top: 1rem; }
 .publish.is-public { border-color: #1a7f45; }
 .publish h2 { margin: 0 0 0.4rem; }
 .publish p { margin: 0 0 0.7rem; font-size: 0.9rem; }

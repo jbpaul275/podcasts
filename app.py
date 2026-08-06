@@ -331,6 +331,9 @@ def _episode_view(row) -> dict:
         # The episode's own title, with the paper's as fallback until the
         # scripting stage has written one.
         "title": row["episode_title"] or paper_title or "(untitled)",
+        # The stored value, not the display fallback, so an edit form does not
+        # silently promote the paper's title into the episode's.
+        "episode_title": row["episode_title"] or "",
         "paper_title": paper_title,
         "attribution": _attribution(row["title"], authors),
         "summary": _blurb(row),
@@ -444,6 +447,22 @@ def admin(request: Request):
     if not auth.is_admin(request):
         return RedirectResponse("/admin/login", status_code=303)
     return _render_library(request, admin_mode=True)
+
+
+@app.post("/episode/{episode_id}/edit")
+def edit_episode(request: Request, episode_id: str,
+                 episode_title: str = Form(""), summary: str = Form("")):
+    """Hand-edit the two public-facing strings. Clearing a field restores the
+    generated fallback rather than leaving the page blank."""
+    require_admin(request)
+    if not db.get_episode(episode_id):
+        raise HTTPException(404, "no such episode")
+    db.update_episode(
+        episode_id,
+        episode_title=" ".join(episode_title.split()) or None,
+        summary=" ".join(summary.split()) or None,
+    )
+    return RedirectResponse(f"/episode/{episode_id}", status_code=303)
 
 
 @app.post("/episode/{episode_id}/publish")
