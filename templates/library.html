@@ -37,7 +37,13 @@
 
 {% if not episodes %}
   <p class="empty">
-    {% if admin and failed %}No finished episodes yet — see the failures below.{% else %}Nothing here yet. Drop a paper in below.{% endif %}
+    {%- if not admin -%}
+      No episodes published yet.
+    {%- elif failed -%}
+      No finished episodes yet — see the failures below.
+    {%- else -%}
+      Nothing here yet. Drop a paper in below.
+    {%- endif -%}
   </p>
 {% endif %}
 

@@ -992,6 +992,21 @@ def test_cannot_publish_an_unfinished_episode(public_client, env, tmp_path):
     assert "not done" in resp.text
 
 
+def test_empty_state_does_not_tell_the_public_to_upload(public_client, env, tmp_path):
+    """The public has no upload panel, so "drop a paper in below" points at
+    nothing that exists for them."""
+    _episode(env, tmp_path, title="Private Draft", status="done", published=0)
+
+    public = public_client.get("/").text
+    assert "No episodes published yet." in public
+    for upload_cue in ("Drop a paper", "Add a paper", "Drop a PDF", "data/inbox"):
+        assert upload_cue not in public, f"{upload_cue!r} points at nothing public"
+
+    public_client.post("/admin/login", data={"password": "hunter2"})
+    admin_html = public_client.get("/admin").text
+    assert "Add a paper" in admin_html and "Drop a PDF" in admin_html
+
+
 def test_admin_library_marks_public_and_private(public_client, env, tmp_path):
     public_client.post("/admin/login", data={"password": "hunter2"})
     _episode(env, tmp_path, name="live", title="Live One", status="done", published=1)
