@@ -14,7 +14,17 @@ max_pages    = 120
 [tts]
 # Models offered in the upload picker, first one the default. Verify IDs
 # against /admin/models before adding — a wrong ID 404s every chunk.
-models = ["gemini-3.1-flash-tts-preview", "gemini-2.5-flash-preview-tts"]
+#
+# TTS models only. The Live models (gemini-3.1-flash-live-preview,
+# gemini-2.5-flash-native-audio-preview-12-2025) are bidirectional streaming
+# models for real-time dialogue; they are not reachable through the
+# generateContent call this pipeline makes, so listing one here would fail
+# every chunk.
+models = [
+  "gemini-3.1-flash-tts-preview",   # default: expressive, highest cost
+  "gemini-2.5-pro-preview-tts",     # high fidelity, aimed at podcasts/audiobooks
+  "gemini-2.5-flash-preview-tts",   # fastest and cheapest
+]
 # Chunk size in words. Split only on speaker-turn boundaries.
 chunk_target_words = 250
 chunk_max_words    = 320
@@ -63,3 +73,14 @@ output_per_1m = 12.00
 [costs."gemini-3.1-flash-tts-preview"]
 input_per_1m  = 1.00
 output_per_1m = 20.00
+
+# The 2.5 TTS prices below are estimates -- verify them before trusting a cost
+# comparison between models. A model with no entry here is silently costed at
+# zero, so every model offered in the picker needs one.
+[costs."gemini-2.5-pro-preview-tts"]
+input_per_1m  = 1.00
+output_per_1m = 20.00
+
+[costs."gemini-2.5-flash-preview-tts"]
+input_per_1m  = 0.50
+output_per_1m = 10.00

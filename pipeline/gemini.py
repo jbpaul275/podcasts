@@ -18,6 +18,9 @@ _client = None
 # same way on every attempt, so retrying only wastes wall-clock.
 RETRYABLE_CODES = {408, 429, 500, 502, 503, 504}
 
+# Warn once per model rather than on every chunk.
+_UNPRICED_WARNED: set[str] = set()
+
 
 def client():
     global _client
@@ -126,6 +129,14 @@ def record_cost(episode_id: str, model: str, response, cfg: dict,
         return 0.0
     prices = cfg.get("costs", {}).get(model)
     if not prices:
+        # Silently costing an unpriced model at zero is worse than useless when
+        # the point of running two models is comparing what they cost.
+        if model not in _UNPRICED_WARNED:
+            _UNPRICED_WARNED.add(model)
+            log.warning(
+                "no [costs.%r] entry in config.toml — this model's spend will be "
+                "reported as $0.00", model,
+            )
         return 0.0
     tokens_in = getattr(usage, "prompt_token_count", 0) or 0
     tokens_out = (getattr(usage, "candidates_token_count", 0) or 0) + (

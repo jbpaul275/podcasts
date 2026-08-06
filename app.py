@@ -60,6 +60,12 @@ async def lifespan(app: FastAPI):
     threading.Thread(target=_worker, daemon=True, name="paperpod-worker").start()
     threading.Thread(target=_watch_inbox, daemon=True, name="paperpod-watcher").start()
     log.info("paperpod up; base_url=%s", CFG["server"]["base_url"])
+    unpriced = [m for m in tts_choices() if m not in CFG.get("costs", {})]
+    if unpriced:
+        log.warning(
+            "TTS models offered with no [costs] entry, so their spend will read "
+            "as $0.00: %s", ", ".join(unpriced),
+        )
     if auth.admin_password() is None:
         log.warning(
             "PAPERPOD_ADMIN_PASSWORD is not set — the admin surface is reachable "

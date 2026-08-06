@@ -84,12 +84,27 @@ python -m pytest tests/ -q
 
 `ai.google.dev` is unreachable from the sandbox this was built in (HTTP 403 through the egress proxy), so the two documentation pages could not be read directly. The API surface was instead verified against the installed `google-genai` SDK (2.17.0), whose type definitions are the binding contract, and the TTS model details cross-checked against published sources.
 
-Confirmed:
+Confirmed in use:
 
-- `gemini-3.1-flash-tts-preview` is current, supports **at most two speakers**, and returns **24 kHz 16-bit mono PCM** — which is why `tts.py` parses the sample rate out of the response MIME type and wraps the PCM in a WAV header rather than guessing.
+- `gemini-3.1-flash-tts-preview` supports **at most two speakers** and returns **24 kHz 16-bit mono PCM** — which is why `tts.py` parses the sample rate out of the response MIME type and wraps the PCM in a WAV header rather than guessing.
 - Every type used (`SpeechConfig`, `MultiSpeakerVoiceConfig`, `SpeakerVoiceConfig`, `VoiceConfig`, `PrebuiltVoiceConfig`) exists in the SDK with the field names used here.
+- `gemini-3-flash-preview` works for metadata and scripting. `gemini-3-pro-preview` returned `limit: 0` on a paid key, so preview Pro appears to need separate access.
 
-**Not verified:** the two text model IDs, `gemini-3-flash-preview` and `gemini-3-pro-preview`. They are unchanged from the spec and are configurable in `config.toml`. Confirm them against <https://ai.google.dev/gemini-api/docs/speech-generation> and <https://ai.google.dev/gemini-api/docs/document-processing> from a machine with access before the first real run; if they are wrong, the fix is one line of config, not code.
+### Which TTS models work
+
+Three, all callable through `generateContent` with an audio response:
+
+| Model | Character |
+|---|---|
+| `gemini-3.1-flash-tts-preview` | Expressive, audio tags, highest cost |
+| `gemini-2.5-pro-preview-tts` | High fidelity, aimed at podcasts and audiobooks |
+| `gemini-2.5-flash-preview-tts` | Fastest and cheapest |
+
+**The Live models are not usable here.** `gemini-3.1-flash-live-preview` and `gemini-2.5-flash-native-audio-preview-12-2025` are bidirectional streaming models for real-time dialogue, reached through the Live API rather than `generateContent`. Putting one in `[tts] models` would fail every chunk.
+
+Visit `/admin/models` to see what your key can actually call — hardcoded IDs go stale, and a wrong one 404s an entire episode before anything surfaces.
+
+The prices in `[costs]` for the two 2.5 TTS models are estimates. **Every model in the picker needs a `[costs]` entry**, or its spend is reported as $0.00; the app logs a warning at startup for any that are missing.
 
 The prices in `[costs]` are documented for TTS and **estimates for the two text models** — correct them against current Gemini pricing so the per-episode cost figure means something.
 
