@@ -40,8 +40,9 @@
 
   {% if admin and ep.flags_unverified %}
     <section class="flagbox" id="flags">
-      <h2>{{ ep.flags_unverified|length }} citation{{ '' if ep.flags_unverified|length == 1 else 's' }} not found in the paper</h2>
-      <p class="muted">These names or years do not appear in the source PDF. Check each one — this is where fabrications show up.</p>
+      <h2>{{ ep.flags_unverified|length }} citation{{ '' if ep.flags_unverified|length == 1 else 's' }} with no source</h2>
+      <p class="muted">These names or years appear neither in the source PDF{% if ep.grounding.sources %} nor
+        in any page the model consulted{% endif %}. Check each one — this is where fabrications show up.</p>
       <ul>
         {% for f in ep.flags_unverified %}<li><code>{{ f.text }}</code> <span class="muted">— {{ f.kind }}, line {{ f.line }}</span></li>{% endfor %}
       </ul>
@@ -50,10 +51,11 @@
 
   {% if admin and ep.flags_in_paper %}
     <details class="flagbox verified" {% if not ep.flags_unverified %}id="flags"{% endif %}>
-      <summary>{{ ep.flags_in_paper|length }} citation-shaped string{{ '' if ep.flags_in_paper|length == 1 else 's' }} traced back to the paper</summary>
-      <p class="muted">Found in the source PDF, so not fabricated. Listed for completeness.</p>
+      <summary>{{ ep.flags_in_paper|length }} citation-shaped string{{ '' if ep.flags_in_paper|length == 1 else 's' }} traced to a source</summary>
+      <p class="muted">Corroborated by the paper or by a page the model actually consulted, so not fabricated. Listed for completeness.</p>
       <ul>
-        {% for f in ep.flags_in_paper %}<li><code>{{ f.text }}</code> <span class="muted">— line {{ f.line }}</span></li>{% endfor %}
+        {% for f in ep.flags_in_paper %}<li><code>{{ f.text }}</code>
+          <span class="muted">— {{ 'found on the web' if f.source == 'web' else 'in the paper' }}, line {{ f.line }}</span></li>{% endfor %}
       </ul>
     </details>
   {% endif %}
@@ -70,6 +72,23 @@
         </p>
       {% endfor %}
     </section>
+  {% endif %}
+
+  {% if admin and ep.grounding.sources %}
+    <details class="sources">
+      <summary>{{ ep.grounding.sources|length }} web source{{ '' if ep.grounding.sources|length == 1 else 's' }} consulted</summary>
+      <p class="muted">Pages the script model actually read while writing. An outside
+        claim is only acceptable if it traces back to one of these.</p>
+      <ul>
+        {% for s in ep.grounding.sources %}
+          <li>{% if s.uri %}<a href="{{ s.uri }}" rel="noopener nofollow" target="_blank">{{ s.title }}</a>{% else %}{{ s.title }}{% endif %}
+            {% if s.domain %}<span class="muted">{{ s.domain }}</span>{% endif %}</li>
+        {% endfor %}
+      </ul>
+      {% if ep.grounding.queries %}
+        <p class="muted queries">Searched: {% for q in ep.grounding.queries %}<code>{{ q }}</code>{{ ", " if not loop.last }}{% endfor %}</p>
+      {% endif %}
+    </details>
   {% endif %}
 
   {% if admin and ep.cost_breakdown %}
@@ -156,6 +175,14 @@
         {% endfor %}
       </table>
     </section>
+  {% endif %}
+
+  {% if admin %}
+  <section class="ttsbox">
+    <h2>Script model</h2>
+    <p><code>{{ ep.script_model }}</code>
+      {% if ep.grounding.sources %}<span class="muted">· grounded in {{ ep.grounding.sources|length }} web source{{ '' if ep.grounding.sources|length == 1 else 's' }}</span>{% endif %}</p>
+  </section>
   {% endif %}
 
   <section class="ttsbox">

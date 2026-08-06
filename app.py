@@ -337,9 +337,25 @@ def _blurb(row, limit: int = 260) -> str:
     return out if len(out) <= limit else out[:limit].rsplit(" ", 1)[0] + "…"
 
 
+def _grounding_corpus(row) -> str | None:
+    """Titles and domains the script model consulted. A citation absent from the
+    PDF but present here was looked up, not invented."""
+    g = db.grounding(row)
+    sources = g.get("sources") or []
+    if not sources:
+        return None
+    # Queries count too: searching for a name is evidence of looking it up
+    # rather than inventing it, and source titles are usually the paper's title
+    # rather than its authors.
+    parts = [f"{s.get('title', '')} {s.get('domain', '')}" for s in sources]
+    parts.extend(g.get("queries") or [])
+    return " ".join(parts)
+
+
 def _episode_view(row) -> dict:
     flags = (
-        script_mod.citation_flags(row["script_md"], _paper_text(row["id"]))
+        script_mod.citation_flags(row["script_md"], _paper_text(row["id"]),
+                                  _grounding_corpus(row))
         if row["script_md"]
         else []
     )
@@ -365,6 +381,8 @@ def _episode_view(row) -> dict:
         "tts_model": row["tts_model"] or CFG["models"]["tts"],
         "tts_model_pinned": bool(row["tts_model"]),
         "audio_built_at": row["audio_built_at"],
+        "script_model": row["script_model"] or CFG["models"]["script"],
+        "grounding": db.grounding(row),
         "script_md_present": bool(row["script_md"]),
         "summary": _blurb(row),
         "authors": authors,

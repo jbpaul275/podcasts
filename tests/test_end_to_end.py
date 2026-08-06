@@ -26,6 +26,10 @@ from pipeline import tts as _tts_module  # noqa: E402
 
 _ORIGINAL_SYNTH_CHUNK = _tts_module._synthesize_chunk
 
+from pipeline import script as _script_module  # noqa: E402
+
+_REAL_GENERATE_SCRIPT = _script_module.generate_script
+
 SAMPLE_SCRIPT = "\n".join([
     "HOST_A: Here's a question worth caring about: does raising the minimum wage cost people jobs?",
     "HOST_B: " + " ".join(["Everyone assumed it did, and the theory is clean."] * 12),
@@ -1708,3 +1712,96 @@ def test_total_chunk_failure_names_the_reason(env, tmp_path, monkeypatch):
     message = str(exc.value)
     assert "gemini-does-not-exist" in message, "names the model that failed"
     assert "404 NOT_FOUND" in message, "carries the underlying error"
+
+
+# ------------------------------------------------ script model and sources
+
+def test_script_model_and_sources_shown_to_admin(public_client, env, tmp_path):
+    import db
+
+    public_client.post("/admin/login", data={"password": "hunter2"})
+    eid = _episode(
+        env, tmp_path, title="T", status="done", published=1,
+        script_md="HOST_A: As Card and Krueger (1994) showed, wages held up.",
+        script_model="gemini-3-pro-preview",
+        grounding_json=json.dumps({
+            "queries": ["minimum wage employment elasticity"],
+            "sources": [{"title": "Card and Krueger 1994", "uri": "https://nber.org/w4509",
+                         "domain": "nber.org"}],
+        }),
+    )
+    html = public_client.get(f"/episode/{eid}").text
+
+    assert "gemini-3-pro-preview" in html
+    assert "1 web source consulted" in html
+    assert "https://nber.org/w4509" in html
+    assert "minimum wage employment elasticity" in html
+    # The citation is corroborated by a consulted page, so it is not a fabrication.
+    assert "not found in the paper" not in html
+    assert "found on the web" in html
+
+
+def test_sources_are_not_public(public_client, env, tmp_path):
+    eid = _episode(
+        env, tmp_path, title="Live", status="done", published=1,
+        audio_path=str(tmp_path / "a.pdf"), script_model="gemini-3-pro-preview",
+        grounding_json=json.dumps({"queries": ["secret query"],
+                                   "sources": [{"title": "S", "uri": "https://x.test",
+                                                "domain": "x.test"}]}),
+    )
+    html = public_client.get(f"/episode/{eid}").text
+    for leak in ("web source consulted", "secret query", "gemini-3-pro-preview"):
+        assert leak not in html
+
+
+def test_script_falls_back_when_the_model_has_no_quota(env, tmp_path, monkeypatch):
+    """A preview Pro returning limit: 0 should degrade to Flash, not kill the
+    episode — and the substitution must be recorded, not silent."""
+    import db
+    from pipeline import QuotaUnavailable, ingest, script as script_mod
+
+    pdf = tmp_path / "paper.pdf"
+    _make_pdf(pdf)
+    eid = ingest.ingest_pdf(pdf, env["cfg"])
+
+    cfg = {**env["cfg"], "models": {**env["cfg"]["models"], "script": "pro-model"},
+           "script": {**env["cfg"]["script"], "fallback_model": "flash-model"}}
+
+    tried = []
+
+    def fake_call(fn, cfg_, model, label="", extra_retryable=()):
+        tried.append(model)
+        if model == "pro-model":
+            raise QuotaUnavailable("pro-model: the plan grants no quota (limit: 0)")
+        return type("R", (), {"text": SAMPLE_SCRIPT, "candidates": []})()
+
+    monkeypatch.setattr(script_mod, "call_with_retry", fake_call)
+    monkeypatch.setattr(script_mod, "record_cost", lambda *a, **k: 0.0)
+    monkeypatch.setattr(script_mod, "pdf_part", lambda p: None)
+    monkeypatch.setattr(script_mod, "PAPERS_DIR", env["papers"])
+
+    out = _REAL_GENERATE_SCRIPT(eid, cfg)
+    assert out == SAMPLE_SCRIPT
+    assert tried == ["pro-model", "flash-model"]
+    assert db.get_episode(eid)["script_model"] == "flash-model"
+
+    detail = " ".join(s["detail"] or "" for s in db.get_stage_log(eid))
+    assert "no quota" in detail and "flash-model" in detail, "substitution recorded"
+
+
+def test_script_fails_when_there_is_no_fallback(env, tmp_path, monkeypatch):
+    from pipeline import QuotaUnavailable, ingest, script as script_mod
+
+    pdf = tmp_path / "paper.pdf"
+    _make_pdf(pdf)
+    eid = ingest.ingest_pdf(pdf, env["cfg"])
+    cfg = {**env["cfg"], "script": {**env["cfg"]["script"], "fallback_model": ""}}
+
+    monkeypatch.setattr(script_mod, "PAPERS_DIR", env["papers"])
+    monkeypatch.setattr(script_mod, "pdf_part", lambda p: None)
+    monkeypatch.setattr(
+        script_mod, "call_with_retry",
+        lambda *a, **k: (_ for _ in ()).throw(QuotaUnavailable("no quota")))
+
+    with pytest.raises(QuotaUnavailable):
+        _REAL_GENERATE_SCRIPT(eid, cfg)

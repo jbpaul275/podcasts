@@ -4,12 +4,13 @@ Also home of the citation-flag validator, which regex-scans the finished script
 for citation-shaped strings and surfaces them for human review in the UI.
 """
 
+import json
 import logging
 import re
 
 import db
 from config import PAPERS_DIR, load_prompt
-from . import PipelineError
+from . import PipelineError, QuotaUnavailable
 from .gemini import call_with_retry, client, pdf_part, record_cost, strip_fences
 
 log = logging.getLogger("paperpod.script")
@@ -74,32 +75,118 @@ _STATUTE_RE = re.compile(
 _LEADING_NAME_RE = re.compile(r"^(?:[A-Z][\w'’-]*(?:\s+(?:and|&|of|for|de|van|von)\s+)?)+")
 
 
+def _script_config(cfg: dict, system: str):
+    """Reasoning effort and web grounding for the script call.
+
+    Scripting is a couple of percent of an episode's cost, so thinking is cheap
+    to buy here; a dense paper with an identification strategy is exactly what
+    it helps with.
+    """
+    from google.genai import types
+
+    scfg = cfg.get("script", {})
+    kwargs: dict = {"system_instruction": system}
+
+    level = (scfg.get("thinking_level") or "").strip().upper()
+    budget = scfg.get("thinking_budget")
+    if level or budget:
+        kwargs["thinking_config"] = types.ThinkingConfig(
+            thinking_level=level or None,
+            thinking_budget=int(budget) if budget else None,
+        )
+
+    if scfg.get("grounding"):
+        kwargs["tools"] = [types.Tool(google_search=types.GoogleSearch())]
+
+    return types.GenerateContentConfig(**kwargs)
+
+
+def collect_grounding(resp) -> dict:
+    """Queries the model ran and the pages it drew on.
+
+    Recorded because grounding relaxes the rule that every claim comes from the
+    PDF: an outside claim is only acceptable if it can be traced, and this is
+    the trace.
+    """
+    out: dict = {"queries": [], "sources": []}
+    try:
+        meta = resp.candidates[0].grounding_metadata
+    except (AttributeError, IndexError, TypeError):
+        return out
+    if meta is None:
+        return out
+
+    out["queries"] = list(getattr(meta, "web_search_queries", None) or [])
+    seen = set()
+    for chunk in getattr(meta, "grounding_chunks", None) or []:
+        web = getattr(chunk, "web", None)
+        if web is None or not (web.uri or web.title):
+            continue
+        key = web.uri or web.title
+        if key in seen:
+            continue
+        seen.add(key)
+        out["sources"].append({
+            "title": web.title or web.domain or web.uri,
+            "uri": web.uri or "",
+            "domain": web.domain or "",
+        })
+    return out
+
+
+def _script_models(cfg: dict) -> list[str]:
+    """Preferred model, then the fallback. A preview Pro often returns
+    limit: 0, and degrading to Flash beats failing the episode outright."""
+    primary = cfg["models"]["script"]
+    fallback = (cfg.get("script", {}).get("fallback_model") or "").strip()
+    return [primary, fallback] if fallback and fallback != primary else [primary]
+
+
 def generate_script(episode_id: str, cfg: dict) -> str:
     pdf_path = PAPERS_DIR / f"{episode_id}.pdf"
     if not pdf_path.exists():
         raise PipelineError(f"missing source PDF {pdf_path}")
 
-    from google.genai import types
-
-    model = cfg["models"]["script"]
     target = cfg["script"]["target_words"]
     system = load_prompt("script_system.md")
+    if cfg.get("script", {}).get("grounding"):
+        system += "\n\n" + load_prompt("script_grounding.md")
     user = (
         load_prompt("script_user.md")
         .replace("$TARGET_WORDS", str(target))
         .replace("$MIN_WORDS", str(int(target * 0.875)))
         .replace("$MAX_WORDS", str(int(target * 1.125)))
     )
-    gen_cfg = types.GenerateContentConfig(system_instruction=system)
+    gen_cfg = _script_config(cfg, system)
     part = pdf_part(pdf_path)
 
-    resp = call_with_retry(
-        lambda: client().models.generate_content(
-            model=model, contents=[part, user], config=gen_cfg
-        ),
-        cfg, model, label="script generation",
-    )
+    candidates = _script_models(cfg)
+    resp = None
+    for i, model in enumerate(candidates):
+        try:
+            resp = call_with_retry(
+                lambda m=model: client().models.generate_content(
+                    model=m, contents=[part, user], config=gen_cfg
+                ),
+                cfg, model, label="script generation",
+            )
+            break
+        except QuotaUnavailable:
+            if i + 1 >= len(candidates):
+                raise
+            log.warning("script model %s unavailable; falling back to %s",
+                        model, candidates[i + 1])
+            db.stage_start(episode_id, "scripting:fallback")
+            db.stage_end(
+                episode_id, "scripting:fallback", ok=False,
+                detail=(f"{model} has no quota, so the script was written by "
+                        f"{candidates[i + 1]} instead — expect lower quality on "
+                        f"a technical paper."),
+            )
+
     record_cost(episode_id, model, resp, cfg, stage="script")
+    db.update_episode(episode_id, script_model=model,
+                      grounding_json=json.dumps(collect_grounding(resp)))
     script = _clean(resp.text or "")
     violations = _format_violations(script)
 
@@ -118,6 +205,7 @@ def generate_script(episode_id: str, cfg: dict) -> str:
             ),
             cfg, model, label="script regeneration",
         )
+        db.update_episode(episode_id, grounding_json=json.dumps(collect_grounding(resp)))
         record_cost(episode_id, model, resp, cfg, stage="script")
         script = _clean(resp.text or "")
         violations = _format_violations(script)
@@ -211,10 +299,22 @@ def appears_in_paper(flag_text: str, paper_text_normalized: str) -> bool:
         # A single short token is too weak to prove anything either way.
         if len(name) > 3 and _normalize(name) in paper_text_normalized:
             return True
+
+    # Last resort: every distinguishing name in the citation appears somewhere
+    # in the corpus, even if not as one phrase. Needed for web grounding, where
+    # a source is titled after the paper rather than its authors, so
+    # "Card and Krueger (1994)" never appears verbatim but both surnames do.
+    names = [
+        w for w in _WORD_RE.findall(flag_text)
+        if len(w) > 2 and w[:1].isupper() and w not in _NOT_AUTHOR_TOKENS
+    ]
+    if names and all(_normalize(n) in paper_text_normalized for n in names):
+        return True
     return False
 
 
-def citation_flags(script: str, paper_text: str | None = None) -> list[dict]:
+def citation_flags(script: str, paper_text: str | None = None,
+                   grounding_text: str | None = None) -> list[dict]:
     """Scan for citation-shaped patterns and return them for human review.
 
     Never auto-fails: the point is to put every string that *could* be a
@@ -223,6 +323,11 @@ def citation_flags(script: str, paper_text: str | None = None) -> list[dict]:
 
     When `paper_text` is supplied, each flag also carries `in_paper`, which is
     what separates a real fabrication from a name the paper actually uses.
+
+    With grounding on, the model may legitimately cite work absent from the PDF,
+    so `grounding_text` (the titles and domains it actually consulted) counts as
+    corroboration too. Each flag records which corpus vouched for it in
+    `source`: "paper", "web", or nothing at all.
     """
     flags: list[dict] = []
     for lineno, line in enumerate(script.splitlines(), start=1):
@@ -272,8 +377,14 @@ def citation_flags(script: str, paper_text: str | None = None) -> list[dict]:
                 continue
             flags.append({"line": lineno, "kind": kind, "text": text})
 
-    if paper_text is not None:
-        normalized = _normalize(paper_text)
+    if paper_text is not None or grounding_text is not None:
+        paper_norm = _normalize(paper_text or "")
+        web_norm = _normalize(grounding_text or "")
         for flag in flags:
-            flag["in_paper"] = appears_in_paper(flag["text"], normalized)
+            if paper_norm and appears_in_paper(flag["text"], paper_norm):
+                flag["in_paper"], flag["source"] = True, "paper"
+            elif web_norm and appears_in_paper(flag["text"], web_norm):
+                flag["in_paper"], flag["source"] = True, "web"
+            else:
+                flag["in_paper"], flag["source"] = False, None
     return flags
