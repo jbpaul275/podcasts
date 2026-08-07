@@ -68,6 +68,22 @@ def _make_pdf(path: Path, pages: int = 3, text: str | None = None):
     doc.close()
 
 
+def _make_scanned_pdf(path: Path, pages: int = 3):
+    """Image-only pages: a real scan, with no text layer at all.
+
+    The previous stand-in was a PDF whose first page was nearly empty but whose
+    later pages carried hundreds of characters. That only looked like a scan
+    because the check sampled page one alone.
+    """
+    import fitz
+
+    doc = fitz.open()
+    for _ in range(pages):
+        doc.new_page().draw_rect(fitz.Rect(40, 40, 500, 700), fill=(0.85, 0.85, 0.85))
+    doc.save(str(path))
+    doc.close()
+
+
 @pytest.fixture
 def env(tmp_path, monkeypatch):
     """Isolated data dirs + DB, with all Gemini calls stubbed."""
@@ -175,8 +191,8 @@ def test_ingest_rejects_scanned_pdf(env, tmp_path):
     from pipeline import PipelineError, ingest
 
     pdf = tmp_path / "scan.pdf"
-    _make_pdf(pdf, pages=2, text="Fig 1.")  # almost no text layer
-    with pytest.raises(PipelineError, match="scanned"):
+    _make_scanned_pdf(pdf, pages=2)
+    with pytest.raises(PipelineError, match="no text layer"):
         ingest.ingest_pdf(pdf, env["cfg"])
 
 
@@ -195,14 +211,14 @@ def test_rejected_pdf_is_visible_as_failed_episode(env, tmp_path):
     from pipeline import PipelineError, ingest
 
     pdf = tmp_path / "scan.pdf"
-    _make_pdf(pdf, pages=1, text="x")
+    _make_scanned_pdf(pdf, pages=1)
     with pytest.raises(PipelineError):
         ingest.ingest_pdf(pdf, env["cfg"])
 
     rows = db.list_episodes()
     assert len(rows) == 1
     assert rows[0]["status"] == "failed"
-    assert "scanned" in rows[0]["error"]
+    assert "no text layer" in rows[0]["error"]
 
 
 def test_duplicate_pdf_is_skipped(env, tmp_path):
@@ -1433,7 +1449,7 @@ def test_rejected_upload_returns_a_readable_message(public_client, env, tmp_path
     """A scanned or over-long PDF used to dump raw JSON at the browser."""
     public_client.post("/admin/login", data={"password": "hunter2"})
     scan = tmp_path / "scan.pdf"
-    _make_pdf(scan, pages=1, text="Fig 1.")
+    _make_scanned_pdf(scan, pages=1)
 
     resp = public_client.post(
         "/upload", files={"file": ("scan.pdf", scan.read_bytes(), "application/pdf")},
@@ -1441,9 +1457,9 @@ def test_rejected_upload_returns_a_readable_message(public_client, env, tmp_path
     )
     assert resp.status_code == 303
     assert resp.headers["location"].startswith("/admin?error=")
-    assert "scanned" in resp.headers["location"]
+    assert "no+text+layer" in resp.headers["location"] or "no%20text%20layer" in resp.headers["location"]
 
-    assert "scanned" in public_client.get(resp.headers["location"]).text
+    assert "no text layer" in public_client.get(resp.headers["location"]).text
 
 
 def test_upload_succeeds_while_another_episode_is_processing(public_client, env, tmp_path):
@@ -2711,3 +2727,84 @@ def test_api_clients_still_get_json(client, env):
     resp = client.delete("/episode/DOESNOTEXIST", headers={"accept": "application/json"})
     assert resp.status_code == 404
     assert resp.json()["detail"] == "no such episode"
+
+
+# ---------------------------------------------------------- PDF acceptance
+
+def test_a_sparse_cover_page_is_not_a_scan(env, tmp_path):
+    """The reported bug. Working-paper series open on a cover page carrying
+    almost nothing — BLS, NBER and IZA all do — and checking only page one
+    called a perfectly good paper a scan."""
+    import fitz
+    from pipeline import ingest
+
+    pdf = tmp_path / "cover.pdf"
+    doc = fitz.open()
+    doc.new_page().insert_textbox(
+        fitz.Rect(50, 50, 550, 750),
+        "BLS WORKING PAPERS\nU.S. Bureau of Labor Statistics\n"
+        "The Impact of Remote Work\nWorking Paper 553", fontsize=11)
+    for _ in range(6):
+        doc.new_page().insert_textbox(fitz.Rect(50, 50, 550, 750),
+                                      "Real body text. " * 60, fontsize=9)
+    doc.save(str(pdf))
+    doc.close()
+
+    first_page_chars = len(fitz.open(pdf)[0].get_text().strip())
+    assert first_page_chars < 500, "the fixture must reproduce the sparse cover"
+    assert ingest.ingest_pdf(pdf, env["cfg"]), "it should be accepted anyway"
+
+
+def test_a_document_with_no_text_anywhere_is_still_refused(env, tmp_path):
+    from pipeline import PipelineError, ingest
+
+    pdf = tmp_path / "scan.pdf"
+    _make_scanned_pdf(pdf, pages=12)
+    with pytest.raises(PipelineError, match="no text at all"):
+        ingest.ingest_pdf(pdf, env["cfg"])
+
+
+def test_a_thin_document_is_not_called_a_scan(env, tmp_path):
+    """Some text but not much is a different problem, and "run OCR" is the
+    wrong advice for it."""
+    import fitz
+    from pipeline import PipelineError, ingest
+
+    pdf = tmp_path / "thin.pdf"
+    doc = fitz.open()
+    doc.new_page().insert_textbox(fitz.Rect(50, 50, 550, 750), "A short note.",
+                                  fontsize=11)
+    doc.save(str(pdf))
+    doc.close()
+
+    with pytest.raises(PipelineError, match="Too little to work from"):
+        ingest.ingest_pdf(pdf, env["cfg"])
+
+
+def test_the_page_limit_names_the_api_ceiling(env, tmp_path):
+    """The limit is editorial, so the message should say how to raise it."""
+    from pipeline import PipelineError, ingest
+
+    pdf = tmp_path / "long.pdf"
+    _make_pdf(pdf, pages=8)
+    cfg = {**env["cfg"], "script": {"target_words": 1600, "max_pages": 5}}
+    with pytest.raises(PipelineError, match="max_pages"):
+        ingest.ingest_pdf(pdf, cfg)
+
+
+def test_the_configured_limit_cannot_exceed_the_api(env, tmp_path):
+    """Allowing 5000 here would just move the failure to an opaque API error."""
+    from pipeline.ingest import API_MAX_PAGES, _validate
+
+    pdf = tmp_path / "ok.pdf"
+    _make_pdf(pdf, pages=3)
+    cfg = {**env["cfg"], "script": {"target_words": 1600, "max_pages": 99999}}
+    assert _validate(pdf, cfg) is None
+    assert API_MAX_PAGES == 1000
+
+
+def test_the_shipped_page_limit_allows_a_long_report():
+    """163 pages is a normal government report, and used to be refused."""
+    from config import load_config
+
+    assert load_config()["script"]["max_pages"] >= 200

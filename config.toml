@@ -17,7 +17,12 @@ host_b = "Kore"
 
 [script]
 target_words = 1600
-max_pages    = 120
+# The API stops at 1000 pages / 50 MB per PDF, so this is an editorial limit,
+# not a technical one. Each page costs ~258 input tokens, and the PDF is sent
+# on both the metadata and the script call: 400 pages is ~103k tokens a call,
+# a few tens of cents on Pro. It also stays under the 200k-token mark where
+# Pro's input rate doubles (~775 pages). Past that you are not reading a paper.
+max_pages    = 400
 
 # How hard the model reasons before writing. Dense papers reward more of it,
 # and scripting is ~2% of an episode's cost, so this is cheap to raise.
