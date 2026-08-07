@@ -1077,8 +1077,18 @@ def test_doi_normalization_rejects_things_that_are_not_dois():
     for raw in (good, f"https://doi.org/{good}", f"doi: {good}",
                 f"  https://dx.doi.org/{good}.  ", f"DOI:{good}"):
         assert normalize_doi(raw) == good, raw
+    # Real DOIs get strange. This one is a live Wiley DOI.
+    gnarly = "10.1002/(SICI)1097-0258(19980815)17:15<1661::AID-SIM968>3.0.CO;2-2"
+    assert normalize_doi(gnarly) == gnarly
+
     for bad in (None, "", "n/a", "see the paper", "10.1257", "arXiv:2103.00020"):
         assert normalize_doi(bad) is None, bad
+
+    # The suffix is interpolated into a URL path we build, so it must not be
+    # able to carry path traversal or a query separator into one.
+    for hostile in ("10.1234/../../etc/passwd", "10.1234/x?a=b", "10.1234/x#y",
+                    "10.1234/x y", "10.1234/."):
+        assert normalize_doi(hostile) is None, hostile
 
 
 def test_a_title_near_miss_is_not_accepted(monkeypatch):

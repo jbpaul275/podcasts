@@ -34,7 +34,12 @@ def normalize_doi(raw: str | None) -> str | None:
     doi = str(raw).strip()
     doi = re.sub(r"^\s*(?:doi:\s*)?(?:https?://(?:dx\.)?doi\.org/)?", "", doi, flags=re.I)
     doi = doi.strip().rstrip(".").strip()
-    return doi if re.match(r"^10\.\d{4,9}/\S+$", doi) else None
+    # The suffix goes into a URL path we build, so keep it to the characters
+    # DOIs actually use. "\S+" would admit ".." segments and query separators
+    # into a path -- harmless against OpenAlex, but not a shape to construct.
+    if not re.match(r"^10\.\d{4,9}/[A-Za-z0-9._;()/:<>+\[\]-]+$", doi):
+        return None
+    return None if "/.." in doi or doi.endswith("/.") else doi
 
 
 def _get(url: str, cfg: dict) -> dict | None:

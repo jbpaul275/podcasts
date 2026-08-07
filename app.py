@@ -466,6 +466,8 @@ def _grounding_corpus(row) -> str | None:
 
 
 def _episode_view(row) -> dict:
+    cats = db.episode_categories(row)
+    labels = category_labels(CFG)
     flags = (
         script_mod.citation_flags(row["script_md"], _paper_text(row["id"]),
                                   _grounding_corpus(row))
@@ -499,13 +501,12 @@ def _episode_view(row) -> dict:
         "grounding": db.grounding(row),
         "script_md_present": bool(row["script_md"]),
         "summary": _blurb(row),
-        "categories": db.episode_categories(row),
+        "categories": cats,
         "doi": row["doi"],
         "cited_by": row["cited_by"],
         "cited_by_at": row["cited_by_at"],
         "cited_by_source": row["cited_by_source"],
-        "category_labels": [category_labels(CFG).get(c, c)
-                            for c in db.episode_categories(row)],
+        "category_labels": [labels.get(c, c) for c in cats],
         "authors": authors,
         "year": row["year"],
         "abstract": row["abstract"],
