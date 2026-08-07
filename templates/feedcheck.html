@@ -16,6 +16,46 @@
   {% endfor %}
 </ul>
 
+{% if queued %}
+  <p class="flash ok" role="status">Queued {{ queued }} episode{{ '' if queued == 1 else 's' }}
+    to have the disclosure recorded. They re-use the dialogue already on disk,
+    so each one is a single short call.</p>
+{% endif %}
+
+{% if backfill.ready or backfill.expensive %}
+  <section class="backfill">
+    <h2>Add the spoken disclosure</h2>
+    {% if backfill.ready %}
+      <p>{{ backfill.ready|length }} episode{{ '' if backfill.ready|length == 1 else 's' }}
+        {{ 'does' if backfill.ready|length == 1 else 'do' }} not open with the current
+        disclosure. Every dialogue chunk is still on disk, so re-running synthesis
+        re-records the intro and nothing else — one short call each, then a rebuild.</p>
+      <form action="/admin/disclosure" method="post">
+        <button type="submit">Record the disclosure on {{ backfill.ready|length }} episode{{ '' if backfill.ready|length == 1 else 's' }}</button>
+      </form>
+      <ul class="plain">
+        {% for ep in backfill.ready %}
+          <li><a href="/episode/{{ ep.id }}">{{ ep.title }}</a></li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+    {% if backfill.expensive %}
+      <p class="warn">{{ backfill.expensive|length }} episode{{ '' if backfill.expensive|length == 1 else 's' }}
+        {{ 'is' if backfill.expensive|length == 1 else 'are' }} also missing it, but
+        {{ 'its' if backfill.expensive|length == 1 else 'their' }} chunk audio is gone —
+        re-running synthesis would pay for the whole script again, not just the intro.
+        Left out of the button above; retry {{ 'it' if backfill.expensive|length == 1 else 'them' }}
+        individually if the cost is worth it.</p>
+      <ul class="plain">
+        {% for ep in backfill.expensive %}
+          <li><a href="/episode/{{ ep.id }}">{{ ep.title }}</a>
+            <span class="muted">{{ ep.present }} of {{ ep.expected or '?' }} chunks on disk</span></li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+  </section>
+{% endif %}
+
 {% if blockers %}
   <p class="error">{{ blockers|length }} thing{{ '' if blockers|length == 1 else 's' }}
     would stop submission. Fix those first.</p>

@@ -3206,3 +3206,54 @@ def test_feed_readiness_checks_the_spoken_disclosure(client, env, tmp_path):
     (env["chunks"] / episode_id / "intro.wav").unlink()
     checks = app_mod.feed_readiness()
     assert any(c["ok"] is False and "spoken AI disclosure" in c["text"] for c in checks)
+
+
+@pytest.mark.skipif(not HAS_FFMPEG, reason="ffmpeg required")
+def test_backfilling_the_disclosure_reuses_the_dialogue_already_on_disk(client, env, tmp_path):
+    """The whole point of the bulk action: one short call per episode, not a
+    re-synthesis of the script."""
+    import app as app_mod
+    import db
+
+    episode_id = _done_episode(env, tmp_path)
+    db.update_episode(episode_id, published=1)
+    (env["chunks"] / episode_id / "intro.wav").unlink()
+
+    html = client.get("/admin/feed").text
+    assert "Add the spoken disclosure" in html
+
+    before = env["calls"]["tts"]
+    resp = client.post("/admin/disclosure", follow_redirects=False)
+    assert resp.status_code == 303 and "queued=1" in resp.headers["location"]
+
+    job = app_mod.WORK_Q.get_nowait()
+    assert job == {"id": episode_id, "from_stage": "synthesizing", "stop_after": None}
+
+    from pipeline import run
+    run.run_episode(episode_id, env["cfg"], from_stage="synthesizing")
+    assert env["calls"]["tts"] == before, "dialogue chunks must not be re-synthesized"
+    assert env["calls"]["intro"] == 2
+    assert "Add the spoken disclosure" not in client.get("/admin/feed").text
+
+
+@pytest.mark.skipif(not HAS_FFMPEG, reason="ffmpeg required")
+def test_an_episode_with_no_chunks_left_is_never_queued_silently(client, env, tmp_path):
+    """Without its chunks, re-running synthesis pays for the entire script
+    again. That is a decision to put in front of a person, not a side effect
+    of pressing one button."""
+    import app as app_mod
+    import shutil
+
+    episode_id = _done_episode(env, tmp_path)
+    shutil.rmtree(env["chunks"] / episode_id)
+
+    split = app_mod._disclosure_backfill()
+    assert [e["id"] for e in split["expensive"]] == [episode_id]
+    assert split["ready"] == []
+
+    html = client.get("/admin/feed").text
+    assert "chunk audio is gone" in html
+    assert "0 of ? chunks on disk" in html
+
+    client.post("/admin/disclosure", follow_redirects=False)
+    assert app_mod.WORK_Q.empty(), "the expensive one must not be queued"
