@@ -21,10 +21,16 @@ def _isolated_db(tmp_path, monkeypatch):
     import config
     import db
 
+    from pipeline import gemini
+
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.db")
     db._local.__dict__.clear()
     db.init_db()
+    # Process-global: a rate-limit window one test opens would make the next
+    # one sleep for it.
+    gemini.THROTTLE.reset()
     yield
+    gemini.THROTTLE.reset()
     db._local.__dict__.clear()
 
 
@@ -620,7 +626,8 @@ def test_completed_chunks_are_skipped_on_resume(tmp_path, monkeypatch):
     monkeypatch.setattr(tts, "_synthesize_chunk", fake_synth)
     # Intro off: this is about chunk resumability, and the intro is a
     # separate single-voice call that would need its own stub.
-    cfg = {"tts": {"chunk_target_words": 120, "chunk_max_words": 200, "context_turns": 2},
+    cfg = {"tts": {"chunk_target_words": 120, "chunk_max_words": 200, "context_turns": 2,
+                   "retry_pass_delay_s": 0},
            "intro": {"enabled": False}}
 
     tts.synthesize("EP1", cfg)
@@ -646,7 +653,8 @@ def test_chunk_prompt_includes_context_but_only_synthesizes_current(tmp_path, mo
         tts, "_synthesize_chunk",
         lambda eid, entry, path, cfg: (entries.append(entry), path.write_bytes(b"\x00" * 100)),
     )
-    tts.synthesize("EP1", {"tts": {"chunk_target_words": 3, "chunk_max_words": 6, "context_turns": 2},
+    tts.synthesize("EP1", {"tts": {"chunk_target_words": 3, "chunk_max_words": 6, "context_turns": 2,
+                                  "retry_pass_delay_s": 0},
                            "intro": {"enabled": False}})
 
     later = entries[2]
@@ -1345,3 +1353,163 @@ def test_shipped_intro_template_reads_as_a_sentence(_isolated_db):
     assert text.startswith("This is a Paperpod, an AI generated podcast")
     assert text.endswith("Today's episode is about Some Important Paper, by Ada Lovelace.")
     assert "$" not in text, "every placeholder must have been substituted"
+
+
+# ------------------------------------------------------- TTS reliability
+
+def test_a_rate_limit_holds_back_every_other_call(monkeypatch):
+    """The failure this fixes: each chunk discovered the closed window on its
+    own, so one 429 became a run of failed chunks rather than a pause."""
+    import threading
+
+    from pipeline import gemini
+
+    monkeypatch.setattr("pipeline.gemini.time.sleep", lambda s: None)
+
+    def always():
+        raise _api_error(429, RATE_LIMITED)   # RetryInfo says 12s
+
+    with pytest.raises(Exception):
+        gemini.call_with_retry(always, RETRY_CFG, "m", "chunk")
+
+    # Another thread -- another chunk, or the other worker's episode -- is made
+    # to wait rather than spending its own retries finding out the same thing.
+    seen = []
+    t = threading.Thread(target=lambda: seen.append(gemini.THROTTLE.remaining()))
+    t.start(); t.join()
+    assert seen[0] > 0
+
+
+def test_the_thread_that_hit_the_limit_does_not_wait_twice(monkeypatch):
+    """It already backs off on its own schedule in the retry loop; waiting on
+    the shared window as well would double every rate-limited retry."""
+    from pipeline import gemini
+
+    slept = []
+    monkeypatch.setattr("pipeline.gemini.time.sleep", slept.append)
+
+    calls = []
+
+    def flaky():
+        calls.append(1)
+        if len(calls) < 2:
+            raise _api_error(429, RATE_LIMITED)
+        return "audio"
+
+    assert gemini.call_with_retry(flaky, RETRY_CFG, "m", "chunk") == "audio"
+    assert slept == [12.5], "one wait for one window, not two"
+
+
+def test_a_dropped_connection_is_retried_but_a_bug_is_not():
+    """These arrive with no HTTP status, so a check that keys on the status
+    code called the most transient failure there is permanent."""
+    from pipeline.gemini import is_retryable
+
+    class ConnectError(Exception):
+        pass
+
+    class RemoteProtocolError(Exception):
+        pass
+
+    assert is_retryable(ConnectError("[Errno 104] Connection reset by peer"))
+    assert is_retryable(RemoteProtocolError("Server disconnected without response"))
+    assert is_retryable(OSError("SSL: EOF occurred in violation of protocol"))
+
+    # Real bugs must still fail on the first attempt.
+    assert not is_retryable(ValueError("bad argument"))
+    assert not is_retryable(KeyError("models"))
+    # And a status the server did send still decides, whatever the words say.
+    assert not is_retryable(_api_error(400, {"error": {"code": 400,
+                                                       "message": "connection"}}))
+
+
+def test_the_gap_says_why_not_just_which(_isolated_db, monkeypatch):
+    """Which chunks are missing is the symptom. Without the reason, the page
+    sends you to the process log to find out what actually went wrong."""
+    import db
+    from pipeline import tts
+
+    monkeypatch.setattr(tts, "CHUNKS_DIR", tmp_chunks())
+    db.create_episode("ERELY", "/tmp/r.pdf", "sha-rely")
+    db.update_episode("ERELY", script_md="\n".join(
+        f"HOST_{'AB'[i % 2]}: " + " ".join(["word"] * 40) for i in range(6)))
+
+    def half_fail(episode_id, entry, wav_path, cfg):
+        if entry["seq"] % 2:
+            raise RuntimeError("429 RESOURCE_EXHAUSTED")
+        wav_path.write_bytes(b"\x00" * 100)
+
+    monkeypatch.setattr(tts, "_synthesize_chunk", half_fail)
+    tts.synthesize("ERELY", {"tts": {"chunk_target_words": 40, "chunk_max_words": 60,
+                                     "retry_pass_delay_s": 0},
+                             "intro": {"enabled": False}})
+
+    detail = [s for s in db.get_stage_log("ERELY") if s["stage"] == "synthesizing:gaps"][-1]["detail"]
+    assert "RuntimeError: 429 RESOURCE_EXHAUSTED" in detail
+    assert "chunks failed" in detail
+
+
+def test_repeated_reasons_are_grouped_rather_than_repeated():
+    """Eight copies of one sentence hide that it is one problem."""
+    from pipeline.tts import _why
+
+    same = {0: "APIError: 429", 1: "APIError: 429", 2: "NoAudioError: text"}
+    out = _why([0, 1, 2], same)
+    assert out.count("APIError: 429") == 1
+    assert "(2 chunks)" in out and "(1 chunk)" in out
+    assert out.index("APIError") < out.index("NoAudioError"), "commonest first"
+
+
+def test_a_chunk_that_fails_once_is_recovered_by_the_second_pass(_isolated_db, monkeypatch):
+    """A rate-limited chunk usually succeeds a minute later. Retrying inside
+    the stage is the difference between a complete episode and one with a hole
+    in it that waits for somebody to notice."""
+    import db
+    from pipeline import tts
+
+    monkeypatch.setattr(tts, "CHUNKS_DIR", tmp_chunks())
+    db.create_episode("ERELY2", "/tmp/r.pdf", "sha-rely2")
+    db.update_episode("ERELY2", script_md="\n".join(
+        f"HOST_{'AB'[i % 2]}: " + " ".join(["word"] * 40) for i in range(6)))
+
+    seen = []
+
+    def flaky_once(episode_id, entry, wav_path, cfg):
+        seen.append(entry["seq"])
+        if entry["seq"] == 1 and seen.count(1) == 1:
+            raise RuntimeError("429 RESOURCE_EXHAUSTED")
+        wav_path.write_bytes(b"\x00" * 100)
+
+    monkeypatch.setattr(tts, "_synthesize_chunk", flaky_once)
+    tts.synthesize("ERELY2", {"tts": {"chunk_target_words": 40, "chunk_max_words": 60,
+                                      "retry_pass_delay_s": 0},
+                              "intro": {"enabled": False}})
+
+    assert seen.count(1) == 2, "the failed chunk is tried again, the others are not"
+    assert not [s for s in db.get_stage_log("ERELY2") if s["stage"] == "synthesizing:gaps"], (
+        "a chunk recovered on the second pass is not a gap"
+    )
+
+
+def test_the_second_pass_can_be_switched_off(_isolated_db, monkeypatch):
+    import db
+    from pipeline import tts
+
+    monkeypatch.setattr(tts, "CHUNKS_DIR", tmp_chunks())
+    db.create_episode("ERELY3", "/tmp/r.pdf", "sha-rely3")
+    db.update_episode("ERELY3", script_md="\n".join(
+        f"HOST_{'AB'[i % 2]}: " + " ".join(["word"] * 40) for i in range(6)))
+
+    seen = []
+
+    def fail_one(episode_id, entry, wav_path, cfg):
+        seen.append(entry["seq"])
+        if entry["seq"] == 1:
+            raise RuntimeError("nope")
+        wav_path.write_bytes(b"\x00" * 100)
+
+    monkeypatch.setattr(tts, "_synthesize_chunk", fail_one)
+    tts.synthesize("ERELY3", {"tts": {"chunk_target_words": 40, "chunk_max_words": 60,
+                                      "retry_pass_delay_s": -1},
+                              "intro": {"enabled": False}})
+    assert seen.count(1) == 1
