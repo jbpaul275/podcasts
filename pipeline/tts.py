@@ -24,7 +24,7 @@ import wave
 import db
 from config import CHUNKS_DIR
 from . import ModelUnusable, NoAudioError, PipelineError
-from .gemini import call_with_retry, client, record_cost
+from .gemini import call_with_retry, client, describe, record_cost
 from .intro import synthesize_intro
 from .script import parse_turns
 
@@ -159,7 +159,7 @@ def _synthesize_pass(episode_id: str, manifest: list[dict], out_dir, cfg: dict,
         except Exception as e:
             log.error("chunk %03d failed, giving up on it: %s", seq, e)
             failed.append(seq)
-            reasons[seq] = f"{type(e).__name__}: {e}"
+            reasons[seq] = describe(e)
     return failed
 
 

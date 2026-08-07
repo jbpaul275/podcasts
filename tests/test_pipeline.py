@@ -1617,3 +1617,101 @@ def test_a_revoiced_rendering_inherits_its_siblings_number(_isolated_db):
     assert db.assign_episode_number("EORIG") == 1
     assert db.assign_episode_number("EOTHER") == 2
     assert db.assign_episode_number("ECLONE") == 1, "the same episode, re-voiced"
+
+
+# ------------------------------------------------ naming the quota that failed
+
+# The real body Gemini returns when a free-tier daily allowance runs out.
+_QUOTA_BODY = {
+    "error": {
+        "code": 429,
+        "message": ("You exceeded your current quota, please check your plan and "
+                    "billing details. For more information on this error, head to: "
+                    "https://ai.google.dev/gemini-api/docs/rate-limits. To monitor "
+                    "your current usage, head to: https://ai.dev/usage"),
+        "status": "RESOURCE_EXHAUSTED",
+        "details": [
+            {"@type": "type.googleapis.com/google.rpc.QuotaFailure",
+             "violations": [{
+                 "quotaMetric": "generativelanguage.googleapis.com/generate_content_free_tier_requests",
+                 "quotaId": "GenerateRequestsPerDayPerProjectPerModel-FreeTier",
+                 "quotaDimensions": {"model": "gemini-3.1-flash-tts", "location": "global"},
+                 "quotaValue": "20"}]},
+            {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "41s"},
+        ],
+    }
+}
+
+_PER_MINUTE_BODY = {
+    "error": {"code": 429, "message": "You exceeded your current quota", "details": [
+        {"@type": "type.googleapis.com/google.rpc.QuotaFailure",
+         "violations": [{"quotaId": "GenerateRequestsPerMinutePerProjectPerModel",
+                         "quotaValue": "10"}]},
+        {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "12s"},
+    ]}
+}
+
+
+def test_a_daily_quota_is_not_retried_through(monkeypatch):
+    """A daily allowance resets on Google's clock, not on ours. Backing off
+    through it burns half an hour to arrive at the same 429."""
+    from pipeline import QuotaUnavailable, gemini
+
+    monkeypatch.setattr("pipeline.gemini.time.sleep", lambda s: None)
+    calls = []
+
+    def always():
+        calls.append(1)
+        raise _api_error(429, _QUOTA_BODY)
+
+    with pytest.raises(QuotaUnavailable) as caught:
+        gemini.call_with_retry(always, RETRY_CFG, "tts-model", "chunk")
+
+    assert len(calls) == 1, "every retry today would fail identically"
+    msg = str(caught.value)
+    assert "daily quota" in msg
+    assert "limit 20" in msg
+    assert "midnight Pacific" in msg, "the only wait that actually helps"
+    assert "count against the day" in msg, (
+        "retrying into an exhausted quota spends more of it"
+    )
+    assert "per Cloud project, not per API key" in msg, (
+        "budget on another project does not raise this one, and a new key in "
+        "the same project changes nothing"
+    )
+    assert "already synthesized are kept" in msg
+
+
+def test_a_per_minute_quota_is_still_waited_out(monkeypatch):
+    """The distinction is the whole point: this one does clear."""
+    from pipeline import gemini
+
+    monkeypatch.setattr("pipeline.gemini.time.sleep", lambda s: None)
+    calls = []
+
+    def flaky():
+        calls.append(1)
+        if len(calls) < 2:
+            raise _api_error(429, _PER_MINUTE_BODY)
+        return "audio"
+
+    assert gemini.call_with_retry(flaky, RETRY_CFG, "m", "chunk") == "audio"
+    assert len(calls) == 2
+
+
+def test_the_quota_that_failed_is_named_rather_than_the_boilerplate():
+    """Raw 429 text is ~400 characters of the same sentence and two URLs, so
+    storing it truncates away the only part that says what to do."""
+    from pipeline import gemini
+
+    reason = gemini.describe(_api_error(429, _QUOTA_BODY))
+    assert "GenerateRequestsPerDayPerProjectPerModel-FreeTier" in reason
+    assert "limit 20" in reason and "per day" in reason
+    assert len(reason) < 200, "short enough to survive being stored and shown"
+    assert "head to: https" not in reason, "the boilerplate is what crowded it out"
+
+
+def test_a_plain_error_still_describes_itself():
+    from pipeline import gemini
+
+    assert gemini.describe(ValueError("bad argument")) == "ValueError: bad argument"

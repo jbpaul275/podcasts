@@ -71,6 +71,18 @@ Nearly every failure here is a rate limit, and rate limits are a fact about the 
 - **Failed chunks get a second pass.** After the first pass the stage waits `[tts] retry_pass_delay_s` (60s) and retries just the ones that failed. A chunk gives up within seconds of hitting a limit; a minute later the same call usually works. Set it to 0 to retry immediately, or negative to disable the pass.
 - **A dropped connection is retried.** Transport failures arrive with no HTTP status, so a retry check that keys on the status code classified the *most* transient failure there is as permanent and burned the chunk on its first attempt. `is_transport_error` catches those by exception type and message — but only when no status is present, so a real 400 is never talked out of being a 400.
 
+**A daily quota is not retried through.** The prose in a 429 is the same sentence every time — "You exceeded your current quota, please check your plan and billing details" — followed by two long documentation URLs, and none of it distinguishes a per-minute limit you should wait out from a per-day one that will not move until tomorrow. The structured `QuotaFailure` detail does, and Google spells the window into the quota id (`GenerateRequestsPerDayPerProjectPerModel-FreeTier`), so it is readable rather than guessed at.
+
+A per-day violation stops the stage immediately instead of backing off through it, because the reset is on Google's clock and half an hour of retries arrives at the same 429. Three facts the error message now carries, because each one changes what you should do:
+
+- **RPD quotas reset at midnight Pacific.** There is no shorter wait to find.
+- **Failed requests still count against the day's allowance.** Retrying into an exhausted quota spends more of it, which is why grinding through is worse than stopping.
+- **Limits are per Cloud project, not per API key.** So a `-FreeTier` quota id means the project *this key belongs to* is unbilled — having budget on a different project does not raise it, and minting a new key in the same project changes nothing. That is a different problem from going too fast, and it needs saying out loud because the 429 text is identical either way.
+
+Budget remaining and rate limit are separate systems: a paid project still caps preview models well below the headline numbers, so money in the account is not evidence that a quota is wrong.
+
+Reasons stored on an episode are distilled rather than dumped — `gemini.describe()` keeps the quota name, limit and window and drops the boilerplate, because the boilerplate is what pushes the useful part past any sensible truncation.
+
 Retrying the stage by hand is still there and still cheap: chunks already on disk are skipped, so you only pay for the holes.
 
 ### Rewriting a script
