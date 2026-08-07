@@ -1598,7 +1598,14 @@ def test_a_daily_quota_is_not_retried_through(monkeypatch):
     msg = str(caught.value)
     assert "daily quota" in msg
     assert "limit 20" in msg
-    assert "billing account" in msg, "free-tier means the project is unbilled"
+    assert "midnight Pacific" in msg, "the only wait that actually helps"
+    assert "count against the day" in msg, (
+        "retrying into an exhausted quota spends more of it"
+    )
+    assert "per Cloud project, not per API key" in msg, (
+        "budget on another project does not raise this one, and a new key in "
+        "the same project changes nothing"
+    )
     assert "already synthesized are kept" in msg
 
 

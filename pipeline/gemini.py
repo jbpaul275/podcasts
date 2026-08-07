@@ -310,11 +310,19 @@ def call_with_retry(fn, cfg: dict, model: str, label: str = "request",
                 # names is about the minute, not the day.
                 raise QuotaUnavailable(
                     f"{model}: the daily quota is used up ({quota_summary(violation)}). "
-                    "It resets on Google's schedule, so retrying today cannot help. "
-                    + ("That quota is a free-tier one, which means this API key's "
-                       "Cloud project has no billing account attached — a paid "
-                       "project would not cap a day this low. "
-                       if quota_is_free_tier(violation) else "")
+                    "Requests-per-day quotas reset at midnight Pacific, so retrying "
+                    "before then cannot help. Note that failed requests count "
+                    "against the day's allowance too — retrying into an exhausted "
+                    "quota spends more of it. "
+                    + ("That quota is a free-tier one. Limits are per Cloud project, "
+                       "not per API key, so this means the project this key belongs "
+                       "to has no billing attached — having budget on a different "
+                       "project does not raise it, and minting a new key in the "
+                       "same project changes nothing. "
+                       if quota_is_free_tier(violation) else
+                       "A paid project still caps preview models well below the "
+                       "headline numbers, and budget remaining is a separate thing "
+                       "from rate limit. ")
                     + "Chunks already synthesized are kept, so a retry once it "
                       "resets only pays for what is missing."
                 ) from e
