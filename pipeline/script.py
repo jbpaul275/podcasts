@@ -10,7 +10,7 @@ import re
 
 import db
 from config import PAPERS_DIR, load_prompt
-from . import PipelineError, QuotaUnavailable
+from . import ModelUnusable, PipelineError
 from .gemini import call_with_retry, client, pdf_part, record_cost, strip_fences
 
 log = logging.getLogger("paperpod.script")
@@ -171,17 +171,19 @@ def generate_script(episode_id: str, cfg: dict) -> str:
                 cfg, model, label="script generation",
             )
             break
-        except QuotaUnavailable:
+        except ModelUnusable as e:
+            # Quota exhausted or the model retired: either way this model can
+            # never serve the request, and the fallback is the whole point.
             if i + 1 >= len(candidates):
                 raise
-            log.warning("script model %s unavailable; falling back to %s",
-                        model, candidates[i + 1])
+            log.warning("script model %s unusable (%s); falling back to %s",
+                        model, e, candidates[i + 1])
             db.stage_start(episode_id, "scripting:fallback")
             db.stage_end(
                 episode_id, "scripting:fallback", ok=False,
-                detail=(f"{model} has no quota, so the script was written by "
-                        f"{candidates[i + 1]} instead — expect lower quality on "
-                        f"a technical paper."),
+                detail=(f"{model} could not be used ({e}) so the script was "
+                        f"written by {candidates[i + 1]} instead — expect lower "
+                        f"quality on a technical paper."),
             )
 
     record_cost(episode_id, model, resp, cfg, stage="script")

@@ -869,3 +869,94 @@ def test_the_client_is_built_with_a_deadline(monkeypatch):
         gemini._client = None
         gemini._timeout_s = gemini.DEFAULT_TIMEOUT_S
     assert captured["timeout_ms"] == 42_000
+
+
+# The real body returned when Google retired gemini-3-pro-preview.
+_RETIRED_BODY = {
+    "error": {
+        "code": 404,
+        "message": ("This model models/gemini-3-pro-preview is no longer "
+                    "available. Please update your code to use a newer model "
+                    "for the latest features and improvements."),
+        "status": "NOT_FOUND",
+    }
+}
+
+
+class _Retired(Exception):
+    code = 404
+    details = _RETIRED_BODY
+
+
+def test_a_retired_model_is_terminal_not_retried():
+    """404 on the model is a config fact: every retry fails identically."""
+    from pipeline import ModelRetired, gemini
+
+    calls = []
+
+    def boom():
+        calls.append(1)
+        raise _Retired("404 NOT_FOUND")
+
+    cfg = {"retry": {"attempts": 4, "base_delay_s": 0, "max_delay_s": 0}}
+    with pytest.raises(ModelRetired) as exc:
+        gemini.call_with_retry(boom, cfg, "gemini-3-pro-preview")
+    assert len(calls) == 1, "a retired model must not be retried"
+    # The message has to name the fix; a bare 404 sends you to the logs.
+    assert "/admin/models" in str(exc.value)
+
+
+def test_a_404_that_is_not_about_the_model_still_raises_plainly():
+    from pipeline import ModelRetired, gemini
+
+    class NotFound(Exception):
+        code = 404
+        details = {"error": {"code": 404, "message": "file not found"}}
+
+    cfg = {"retry": {"attempts": 2, "base_delay_s": 0, "max_delay_s": 0}}
+    with pytest.raises(Exception) as exc:
+        gemini.call_with_retry(lambda: (_ for _ in ()).throw(NotFound("nope")),
+                               cfg, "some-model")
+    assert not isinstance(exc.value, ModelRetired)
+
+
+def test_a_retired_script_model_falls_back(tmp_path, monkeypatch):
+    """The fallback exists for exactly this; it must not be quota-only."""
+    import db
+    from pipeline import script as script_mod
+
+    db.create_episode("ERET", "/tmp/r.pdf", "sha-ret")
+    papers = tmp_path / "papers"
+    papers.mkdir()
+    (papers / "ERET.pdf").write_bytes(b"%PDF-1.4 fake")
+    monkeypatch.setattr(script_mod, "PAPERS_DIR", papers)
+
+    tried = []
+
+    class Resp:
+        text = "HOST_A: Hello there everyone.\nHOST_B: Good to be here."
+        usage_metadata = None
+        candidates = []
+
+    def fake_generate_content(*, model, contents, config):
+        tried.append(model)
+        if model == "gemini-3-pro-preview":
+            raise _Retired("404 NOT_FOUND")
+        return Resp()
+
+    monkeypatch.setattr(script_mod, "client",
+                        lambda: type("C", (), {"models": type("M", (), {
+                            "generate_content": staticmethod(fake_generate_content)})()})())
+    monkeypatch.setattr(script_mod, "pdf_part", lambda p: "PART")
+
+    cfg = {
+        "models": {"script": "gemini-3-pro-preview"},
+        "script": {"target_words": 1600,
+                   "fallback_model": "gemini-3-flash-preview"},
+        "retry": {"attempts": 2, "base_delay_s": 0, "max_delay_s": 0},
+    }
+
+    out = script_mod.generate_script("ERET", cfg)
+    assert tried == ["gemini-3-pro-preview", "gemini-3-flash-preview"]
+    assert "HOST_A:" in out
+    assert db.get_episode("ERET")["script_model"] == "gemini-3-flash-preview"

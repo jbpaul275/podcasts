@@ -7,7 +7,7 @@ import re
 import time
 
 import db
-from . import PipelineError, QuotaUnavailable
+from . import ModelRetired, PipelineError, QuotaUnavailable
 
 log = logging.getLogger("paperpod.gemini")
 
@@ -89,6 +89,20 @@ def quota_is_unavailable(exc) -> bool:
     return bool(re.search(r"limit:\s*0\b", blob + " " + str(exc)))
 
 
+def model_is_gone(exc) -> bool:
+    """A 404 for the model itself: retired, renamed, or never existed.
+
+    Distinct from a 404 on anything else, and worth naming, because it is a
+    fact about the config rather than about this request -- every retry and
+    every remaining chunk will fail identically, and the only useful response
+    is to try a different model.
+    """
+    if getattr(exc, "code", None) != 404:
+        return False
+    blob = (str(exc) + " " + json.dumps(_payload(exc), default=str)).casefold()
+    return "model" in blob
+
+
 def is_timeout(exc) -> bool:
     """A request that ran past its deadline, by any name the transport uses."""
     return "timeout" in type(exc).__name__.casefold()
@@ -124,6 +138,14 @@ def call_with_retry(fn, cfg: dict, model: str, label: str = "request",
             delay = base * (2 ** attempt)
         except Exception as e:
             last = e
+            if model_is_gone(e):
+                raise ModelRetired(
+                    f"{model} no longer exists at the API. Providers retire "
+                    "preview models on their own schedule, so this can start "
+                    "failing without anything here changing. Check /admin/models "
+                    "for the current IDs and update [models] in config.toml "
+                    "(or the PAPERPOD_MODEL_* environment override)."
+                ) from e
             if quota_is_unavailable(e):
                 raise QuotaUnavailable(
                     f"{model} has no quota on this API key's plan (limit: 0). "

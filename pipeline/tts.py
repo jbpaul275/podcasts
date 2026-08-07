@@ -22,7 +22,7 @@ import wave
 
 import db
 from config import CHUNKS_DIR
-from . import NoAudioError, PipelineError, QuotaUnavailable
+from . import ModelUnusable, NoAudioError, PipelineError
 from .gemini import call_with_retry, client, record_cost
 from .script import parse_turns
 
@@ -100,9 +100,10 @@ def synthesize(episode_id: str, cfg: dict) -> None:
         db.set_progress(episode_id, f"synthesizing chunk {seq + 1} of {total}")
         try:
             _synthesize_chunk(episode_id, entry, wav_path, cfg)
-        except QuotaUnavailable:
-            # Every remaining chunk would fail identically; stop rather than
-            # grinding through the whole script to produce nothing.
+        except ModelUnusable:
+            # No quota, or the model is retired. Every remaining chunk would
+            # fail identically, so stop on the first rather than grinding
+            # through the whole script to produce nothing.
             raise
         except Exception as e:
             log.error("chunk %03d failed, giving up on it: %s", seq, e)

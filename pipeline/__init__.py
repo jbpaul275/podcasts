@@ -16,6 +16,18 @@ class NoAudioError(PipelineError):
     so it is worth retrying rather than failing the chunk outright."""
 
 
-class QuotaUnavailable(PipelineError):
+class ModelUnusable(PipelineError):
+    """This model cannot serve this request, and no amount of retrying changes
+    that. The useful response is to try a different model, so callers with a
+    fallback catch this rather than the specific reasons below."""
+
+
+class QuotaUnavailable(ModelUnusable):
     """The plan has no allowance for this model at all (limit: 0), as opposed
     to being temporarily rate limited. Retrying can never succeed."""
+
+
+class ModelRetired(ModelUnusable):
+    """The model ID 404s: withdrawn, renamed, or wrong. Providers retire
+    preview models on their own schedule, so a config that worked last week
+    can start failing without anything here changing."""
