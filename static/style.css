@@ -252,6 +252,14 @@ audio { width: 100%; margin-top: 0.85rem; }
 .costs .total td { font-weight: 600; border-bottom: none; }
 
 /* stage log */
+/* Diagnostics: collapsed unless something went wrong. */
+.stages { margin-top: 2.5rem; }
+.stages > summary {
+  cursor: pointer; color: var(--muted); font-size: 1rem; font-weight: 400;
+  letter-spacing: 0.02em; text-transform: uppercase;
+}
+.stagecount { text-transform: none; letter-spacing: 0; font-size: 0.8rem; margin-left: 0.6rem; }
+.stages[open] > summary { margin-bottom: 0.9rem; }
 .stages table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
 .stages th { text-align: left; color: var(--muted); font-weight: 600; border-bottom: 1px solid var(--rule); padding: 0.35rem 0.5rem 0.35rem 0; }
 .stages td { padding: 0.35rem 0.5rem 0.35rem 0; border-bottom: 1px solid var(--rule); vertical-align: top; }

@@ -1916,3 +1916,38 @@ def test_progress_reaches_the_admin_pages(client, env):
         body = client.get(url).text
         assert "chunk 3 of 12" in body, url
         assert "stalled" in body, url
+
+
+def test_stage_log_is_collapsed_on_a_healthy_episode(client, env, tmp_path):
+    """It is diagnostics; a working episode should not lead with it."""
+    import db
+    from pipeline import ingest
+
+    pdf = tmp_path / "sl.pdf"
+    _make_pdf(pdf)
+    episode_id = ingest.ingest_pdf(pdf, env["cfg"])
+    db.update_episode(episode_id, status="done")
+
+    body = client.get(f"/episode/{episode_id}").text
+    assert '<details class="stages"' in body
+    assert '<details class="stages" open>' not in body
+
+
+def test_stage_log_opens_itself_when_something_went_wrong(client, env, tmp_path):
+    """Collapsing it must not hide the one case you actually need it for."""
+    import db
+    from pipeline import ingest
+
+    pdf = tmp_path / "sl2.pdf"
+    _make_pdf(pdf)
+    episode_id = ingest.ingest_pdf(pdf, env["cfg"])
+    db.update_episode(episode_id, status="failed", error="boom")
+    assert '<details class="stages" open>' in client.get(f"/episode/{episode_id}").text
+
+    # A gap warning counts too: the detail explaining it lives in the log.
+    db.update_episode(episode_id, status="done")
+    db.stage_start(episode_id, "synthesizing")
+    db.stage_end(episode_id, "synthesizing", ok=True)
+    db.stage_start(episode_id, "synthesizing:gaps")
+    db.stage_end(episode_id, "synthesizing:gaps", ok=False, detail="chunks failed: [2]")
+    assert '<details class="stages" open>' in client.get(f"/episode/{episode_id}").text
