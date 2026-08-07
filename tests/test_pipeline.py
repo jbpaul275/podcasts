@@ -985,3 +985,84 @@ def test_a_retired_script_model_falls_back(tmp_path, monkeypatch):
     assert tried == ["gemini-3-pro-preview", "gemini-3-flash-preview"]
     assert "HOST_A:" in out
     assert db.get_episode("ERET")["script_model"] == "gemini-3-flash-preview"
+
+
+class _Usage:
+    prompt_token_count = 1_000_000
+    candidates_token_count = 1_000_000
+    thoughts_token_count = 0
+
+
+class _Resp:
+    usage_metadata = _Usage()
+
+    def __init__(self, model_version=None):
+        self.model_version = model_version
+
+
+def test_cost_uses_the_model_that_actually_ran(_isolated_db):
+    """An alias can be repointed at a differently-priced model. A table keyed
+    only on the requested name cannot see that happen."""
+    import db
+    from pipeline import gemini
+
+    cfg = {"costs": {
+        "gemini-flash-latest": {"input_per_1m": 0.30, "output_per_1m": 2.50},
+        "gemini-3.6-flash": {"input_per_1m": 1.50, "output_per_1m": 7.50},
+    }}
+    db.create_episode("ECOST", "/tmp/c.pdf", "sha-cost")
+
+    usd = gemini.record_cost("ECOST", "gemini-flash-latest",
+                             _Resp("gemini-3.6-flash"), cfg)
+    # 1M in + 1M out at the resolved model's rate, not the alias's stale one.
+    assert usd == pytest.approx(1.50 + 7.50)
+
+
+def test_cost_falls_back_to_the_requested_name(_isolated_db):
+    """Not every response names a model; the alias entry still has to work."""
+    import db
+    from pipeline import gemini
+
+    cfg = {"costs": {"gemini-pro-latest": {"input_per_1m": 2.0, "output_per_1m": 12.0}}}
+    db.create_episode("ECOST2", "/tmp/c.pdf", "sha-cost2")
+    usd = gemini.record_cost("ECOST2", "gemini-pro-latest", _Resp(None), cfg)
+    assert usd == pytest.approx(14.0)
+
+
+def test_an_alias_moving_to_an_unpriced_model_warns(_isolated_db, caplog):
+    """The failure this is here to catch: silently reading $0.00 forever."""
+    import db
+    from pipeline import gemini
+
+    gemini._UNPRICED_WARNED.clear()
+    cfg = {"costs": {"gemini-flash-latest": {"input_per_1m": 1.5, "output_per_1m": 7.5}}}
+    db.create_episode("ECOST3", "/tmp/c.pdf", "sha-cost3")
+
+    # Resolved name is unpriced, but the alias is -- so it still costs, and says
+    # the number is only right while the alias has not moved.
+    with caplog.at_level("INFO"):
+        usd = gemini.record_cost("ECOST3", "gemini-flash-latest",
+                                 _Resp("gemini-4-flash"), cfg)
+    assert usd == pytest.approx(9.0)
+    assert "gemini-4-flash" in caplog.text
+
+    # Neither priced: warn loudly and cost nothing rather than guess.
+    gemini._UNPRICED_WARNED.clear()
+    caplog.clear()
+    with caplog.at_level("WARNING"):
+        usd = gemini.record_cost("ECOST3", "unknown-model",
+                                 _Resp("also-unknown"), cfg)
+    assert usd == 0.0
+    assert "$0.00" in caplog.text
+
+
+def test_shipped_prices_cover_every_model_the_config_can_use():
+    """A model with no entry is silently costed at zero."""
+    from config import load_config
+    from pipeline.script import script_choices
+
+    cfg = load_config()
+    used = set(cfg["models"].values()) | set(cfg["tts"]["models"]) | set(script_choices(cfg))
+    used.add(cfg["script"]["fallback_model"])
+    missing = sorted(m for m in used if m not in cfg["costs"])
+    assert not missing, f"unpriced: {missing}"
