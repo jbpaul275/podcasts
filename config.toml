@@ -1,6 +1,14 @@
+# The two text models are the *-latest aliases rather than pinned preview IDs.
+# gemini-3-pro-preview was withdrawn while it was still advertised by
+# models.list(), and every episode failed until someone noticed. Google
+# repoints the aliases, so a retirement becomes a quality change instead of an
+# outage. Pin a dated ID here instead if you need reproducible output, and
+# accept that you are then on the hook for retirements.
+#
+# TTS has no alias, so it stays pinned -- check /admin/models when it 404s.
 [models]
-metadata = "gemini-3-flash-preview"
-script   = "gemini-3-pro-preview"
+metadata = "gemini-flash-latest"
+script   = "gemini-pro-latest"
 tts      = "gemini-3.1-flash-tts-preview"
 
 [voices]
@@ -25,7 +33,9 @@ grounding = false
 # If the script model has no quota (a preview Pro often returns limit: 0),
 # fall back to this rather than failing the episode. Empty disables the
 # fallback. The substitution is recorded in the stage log.
-fallback_model = "gemini-3-flash-preview"
+# An alias too: the fallback's whole job is to still be there when the
+# primary is not, which a pinned preview ID cannot promise.
+fallback_model = "gemini-flash-latest"
 
 [tts]
 # Models offered in the upload picker, first one the default. Verify IDs
@@ -88,6 +98,19 @@ contact_email = "jbpaul275@gmail.com"
 
 # USD per 1M tokens. TTS prices are the documented preview prices; the two
 # text-model prices are estimates -- verify against current Gemini pricing.
+# The *-latest aliases carry the last known prices for the tier they point at.
+# VERIFY THESE against ai.google.dev/gemini-api/docs/pricing -- an alias can be
+# repointed at a model that costs something else, and nothing here would notice.
+# Scripting is ~2-3% of an episode, so an error is small but not zero. A model
+# with no entry is silently costed at $0.00, which is worse.
+[costs."gemini-pro-latest"]
+input_per_1m  = 2.00
+output_per_1m = 12.00
+
+[costs."gemini-flash-latest"]
+input_per_1m  = 0.30
+output_per_1m = 2.50
+
 [costs."gemini-3-flash-preview"]
 input_per_1m  = 0.30
 output_per_1m = 2.50
