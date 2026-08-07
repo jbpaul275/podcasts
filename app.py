@@ -15,7 +15,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from email.utils import format_datetime
 from pathlib import Path
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, urlencode, urlparse
 from xml.sax.saxutils import escape as xml_escape
 
 from fastapi import FastAPI, Form, HTTPException, Request, UploadFile
@@ -713,11 +713,12 @@ def logout():
 
 @app.get("/admin", response_class=HTMLResponse)
 def admin(request: Request, error: str = "", deleted: str = "",
-          category: str = "", sort: str = ""):
+          category: str = "", sort: str = "", visibility: str = ""):
     if not auth.is_admin(request):
         return RedirectResponse("/admin/login", status_code=303)
     return _render_library(request, admin_mode=True, error=error,
-                           deleted=bool(deleted), category=category, sort=sort)
+                           deleted=bool(deleted), category=category, sort=sort,
+                           visibility=visibility)
 
 
 @app.post("/episode/{episode_id}/edit")
@@ -1064,7 +1065,8 @@ def _sorted_episodes(episodes: list[dict], sort: str) -> list[dict]:
     return sorted(episodes, key=key, reverse=rev)
 
 
-def _category_chips(episodes: list[dict], selected: str) -> list[dict]:
+def _category_chips(episodes: list[dict], selected: str, admin_mode: bool,
+                    sort: str, visibility: str) -> list[dict]:
     """The filter row: only tags that actually have episodes behind them.
 
     An empty category is a dead end -- showing it invites a click that lands on
@@ -1075,18 +1077,62 @@ def _category_chips(episodes: list[dict], selected: str) -> list[dict]:
     for ep in episodes:
         for slug in ep["categories"]:
             counts[slug] = counts.get(slug, 0) + 1
+    def href(slug):
+        return _browse_url(admin_mode, sort=sort, category=slug,
+                           visibility=visibility)
+
     chips = [{"slug": "", "label": "All", "count": len(episodes),
-              "selected": not selected}]
+              "selected": not selected, "href": href("")}]
     for c in categories(CFG):
         if counts.get(c["slug"]):
             chips.append({**c, "count": counts[c["slug"]],
-                          "selected": c["slug"] == selected})
+                          "selected": c["slug"] == selected,
+                          "href": href(c["slug"])})
     # A row with only "All" in it is chrome, not navigation.
     return chips if len(chips) > 1 else []
 
 
+def _browse_url(admin_mode: bool, *, sort: str = "", category: str = "",
+                visibility: str = "") -> str:
+    """A library URL carrying the whole browse state.
+
+    Built here rather than concatenated in the template: every chip has to
+    preserve the other two facets, and doing that in Jinja is how one of them
+    quietly starts getting dropped.
+    """
+    params = [("sort", sort if sort != DEFAULT_SORT else ""),
+              ("category", category), ("visibility", visibility)]
+    q = urlencode([(k, v) for k, v in params if v])
+    return ("/admin" if admin_mode else "/") + (f"?{q}" if q else "")
+
+
+# Admin only: the public page has nothing but published episodes to begin with.
+VISIBILITY = {
+    "private": ("Not published", lambda e: not e["published"]),
+    "public": ("Published", lambda e: e["published"]),
+}
+
+
+def _visibility_chips(episodes: list[dict], selected: str, sort: str,
+                      category: str) -> list[dict]:
+    """Counts are over the set the other filters have already narrowed, so each
+    chip says what clicking it actually gives you rather than a library-wide
+    total that will not match the page."""
+    def chip(key, label, count):
+        return {"key": key, "label": label, "count": count,
+                "selected": key == selected,
+                "href": _browse_url(True, sort=sort, category=category,
+                                    visibility=key)}
+
+    chips = [chip("", "All", len(episodes))]
+    for key, (label, match) in VISIBILITY.items():
+        chips.append(chip(key, label, sum(1 for e in episodes if match(e))))
+    return chips
+
+
 def _render_library(request: Request, admin_mode: bool, error: str = "",
-                    deleted: bool = False, category: str = "", sort: str = ""):
+                    deleted: bool = False, category: str = "", sort: str = "",
+                    visibility: str = ""):
     all_episodes = [
         _episode_view(r) for r in db.list_episodes(published_only=not admin_mode)
     ]
@@ -1098,10 +1144,19 @@ def _render_library(request: Request, admin_mode: bool, error: str = "",
     failed = ([{**e, "short_error": _short_error(e["error"])}
                for e in all_episodes if e["status"] == "failed"]
               if admin_mode else [])
-    chips = _category_chips(episodes, category)
+    visibility = visibility if (admin_mode and visibility in VISIBILITY) else ""
+    # Each facet counts over what the *other* facets leave, so the two rows stay
+    # honest about each other.
+    by_category = ([e for e in episodes if category in e["categories"]]
+                   if category else episodes)
+    sort = sort if sort in SORTS else DEFAULT_SORT
+    vis_chips = (_visibility_chips(by_category, visibility, sort, category)
+                 if admin_mode else [])
+    if visibility:
+        episodes = [e for e in episodes if VISIBILITY[visibility][1](e)]
+    chips = _category_chips(episodes, category, admin_mode, sort, visibility)
     if category:
         episodes = [e for e in episodes if category in e["categories"]]
-    sort = sort if sort in SORTS else DEFAULT_SORT
     episodes = _sorted_episodes(episodes, sort)
     return templates.TemplateResponse(
         request,
@@ -1120,7 +1175,13 @@ def _render_library(request: Request, admin_mode: bool, error: str = "",
             "category": category,
             "category_label": category_labels(CFG).get(category, ""),
             "sort": sort,
-            "sorts": [{"key": k, "label": v[0]} for k, v in SORTS.items()],
+            "sorts": [{"key": k, "label": v[0],
+                       "href": _browse_url(admin_mode, sort=k, category=category,
+                                           visibility=visibility)}
+                      for k, v in SORTS.items()],
+            "vis_chips": vis_chips,
+            "visibility": visibility,
+            "visibility_label": VISIBILITY.get(visibility, ("",))[0],
             "error": error,
             "total_cost": sum(e["cost_usd"] for e in all_episodes),
             "feed_url": CFG["server"]["base_url"].rstrip("/") + "/feed.xml",

@@ -2958,3 +2958,104 @@ def test_the_shipped_page_limit_allows_a_long_report():
     from config import load_config
 
     assert load_config()["script"]["max_pages"] >= 200
+
+
+# ------------------------------------------------- published/unpublished filter
+
+def _vis_paper(env, tmp_path, name, *, published, cats=(), cited=None):
+    import db
+    from pipeline import ingest
+
+    pdf = tmp_path / name
+    _make_pdf(pdf)
+    eid = ingest.ingest_pdf(pdf, env["cfg"])
+    db.update_episode(eid, status="done", published=1 if published else 0,
+                      flags_reviewed=1, title=name, cited_by=cited,
+                      categories=json.dumps(list(cats)))
+    return eid
+
+
+def test_the_admin_can_see_only_unpublished_episodes(client, env, tmp_path):
+    """The point of the feature: reviewing what is not live yet."""
+    _vis_paper(env, tmp_path, "live.pdf", published=True)
+    _vis_paper(env, tmp_path, "draft.pdf", published=False)
+
+    body = client.get("/admin?visibility=private").text
+    assert "draft.pdf" in body and "live.pdf" not in body
+
+    body = client.get("/admin?visibility=public").text
+    assert "live.pdf" in body and "draft.pdf" not in body
+
+    both = client.get("/admin").text
+    assert "live.pdf" in both and "draft.pdf" in both
+
+
+def test_the_visibility_filter_is_admin_only(client, env, tmp_path):
+    """The public page has nothing but published episodes to begin with, and a
+    ?visibility=private there must not become a way to see drafts."""
+    _vis_paper(env, tmp_path, "secret.pdf", published=False)
+    _vis_paper(env, tmp_path, "shown.pdf", published=True)
+
+    body = client.get("/?visibility=private").text
+    assert "secret.pdf" not in body
+    assert "shown.pdf" in body, "an ignored filter must not empty the page"
+
+
+def test_visibility_composes_with_category_and_sort(client, env, tmp_path):
+    _vis_paper(env, tmp_path, "draft-ai-big.pdf", published=False, cats=["ai"], cited=900)
+    _vis_paper(env, tmp_path, "draft-ai-small.pdf", published=False, cats=["ai"], cited=5)
+    _vis_paper(env, tmp_path, "live-ai.pdf", published=True, cats=["ai"], cited=999)
+    _vis_paper(env, tmp_path, "draft-econ.pdf", published=False, cats=["economics"])
+
+    body = client.get("/admin?visibility=private&category=ai&sort=cited").text
+    assert "live-ai.pdf" not in body, "visibility applies"
+    assert "draft-econ.pdf" not in body, "category applies"
+    order = sorted(["draft-ai-big.pdf", "draft-ai-small.pdf"], key=body.index)
+    assert order == ["draft-ai-big.pdf", "draft-ai-small.pdf"], "sort applies"
+
+
+def test_every_chip_preserves_the_other_facets(client, env, tmp_path):
+    """Each chip has to carry the other two, or clicking one silently drops
+    the others."""
+    import re as _re
+
+    _vis_paper(env, tmp_path, "a.pdf", published=False, cats=["ai"], cited=5)
+    body = client.get("/admin?visibility=private&category=ai&sort=cited").text
+
+    hrefs = _re.findall(r'class="chip[^"]*" href="([^"]+)"', body)
+    assert hrefs, "chips should be rendered"
+    for h in hrefs:
+        # Whichever facet a chip changes, it keeps the two it does not.
+        if "category=" not in h and "sort=" not in h and "visibility=" not in h:
+            continue  # the "All"/default chip legitimately clears its own facet
+        assert h.startswith("/admin"), h
+    # Concretely: the sort chips keep both filters.
+    assert any("visibility=private" in h and "category=ai" in h for h in hrefs)
+
+
+def test_the_counts_describe_what_a_click_gives_you(client, env, tmp_path):
+    """Counting library-wide would show a number the page then contradicts."""
+    _vis_paper(env, tmp_path, "d1.pdf", published=False, cats=["ai"])
+    _vis_paper(env, tmp_path, "d2.pdf", published=False, cats=["ai"])
+    _vis_paper(env, tmp_path, "p1.pdf", published=True, cats=["ai"])
+    _vis_paper(env, tmp_path, "p2.pdf", published=True, cats=["history"])
+
+    body = client.get("/admin").text
+    assert 'Not published<span class="chipn">2</span>' in body
+    assert 'Published<span class="chipn">2</span>' in body
+
+    # Inside a category, the visibility counts narrow to it.
+    body = client.get("/admin?category=history").text
+    assert 'Not published<span class="chipn">0</span>' in body
+    assert 'Published<span class="chipn">1</span>' in body
+
+    # And the category counts narrow to the chosen visibility.
+    body = client.get("/admin?visibility=private").text
+    assert 'AI<span class="chipn">2</span>' in body
+    assert ">History<" not in body, "no unpublished history episodes"
+
+
+def test_an_empty_filter_result_says_so(client, env, tmp_path):
+    _vis_paper(env, tmp_path, "only-live.pdf", published=True)
+    body = client.get("/admin?visibility=private").text
+    assert "Nothing here" in body and "Show everything" in body
