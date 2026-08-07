@@ -40,10 +40,21 @@ template_no_authors = "This is a Paperpod, an AI generated podcast with discussi
 target_words = 1600
 # The API stops at 1000 pages / 50 MB per PDF, so this is an editorial limit,
 # not a technical one. Each page costs ~258 input tokens, and the PDF is sent
-# on both the metadata and the script call: 400 pages is ~103k tokens a call,
-# a few tens of cents on Pro. It also stays under the 200k-token mark where
-# Pro's input rate doubles (~775 pages). Past that you are not reading a paper.
-max_pages    = 400
+# on both the metadata and the script call.
+#
+# 775 pages is where a single call reaches 200k input tokens -- the mark at
+# which Pro's input rate doubles. That is a real price cliff rather than a
+# guess, which makes it a better ceiling than a round number: everything under
+# it is priced predictably, and a government report that runs to 400-odd pages
+# stops being a special case.
+#
+# What it costs at the top of that range: ~200k input tokens per call, so
+# roughly $0.30 on Flash for metadata and $0.40 on Pro for the script. Still
+# less than the TTS for the same episode.
+#
+# Override per-deployment with PAPERPOD_MAX_PAGES rather than editing this,
+# so a single oversized paper does not need a code change and a redeploy.
+max_pages    = 775
 
 # How hard the model reasons before writing. Dense papers reward more of it,
 # and scripting is ~2% of an episode's cost, so this is cheap to raise.
@@ -215,7 +226,8 @@ input_per_1m  = 2.00
 output_per_1m = 12.00
 
 # Note: Pro charges 4.00/18.00 above a 200k-token prompt. [script] max_pages is
-# 120, which lands well short of that, so the single rate is used.
+# set at the page count that reaches that mark, so the single rate is used --
+# raise max_pages past it and the cost shown for those episodes reads low.
 [costs."gemini-pro-latest"]
 input_per_1m  = 2.00
 output_per_1m = 12.00

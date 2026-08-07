@@ -159,6 +159,9 @@
     <a href="/admin/feed">podcast feed</a><br>
     <a href="/admin/models">available models</a><br>
     <a href="/admin/prompts">edit prompts</a>
+    {# A stale deploy has no symptom of its own — it just makes fixed things
+       look unfixed. Showing the build date makes it checkable at a glance. #}
+    {% if build and build != 'dev' %}<br><span class="buildstamp" title="When the running image was built">built {{ build }}</span>{% endif %}
   </p>
 </aside>
 {% endif %}

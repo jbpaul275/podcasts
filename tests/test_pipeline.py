@@ -1513,3 +1513,34 @@ def test_the_second_pass_can_be_switched_off(_isolated_db, monkeypatch):
                                       "retry_pass_delay_s": -1},
                               "intro": {"enabled": False}})
     assert seen.count(1) == 1
+
+
+def test_the_page_limit_can_be_raised_without_a_redeploy(monkeypatch):
+    """One awkward paper should not need a code change: the symptom of a stale
+    deploy is a config change that appears to have been ignored."""
+    import importlib
+
+    import config
+
+    monkeypatch.setenv("PAPERPOD_MAX_PAGES", "900")
+    cfg = importlib.reload(config).load_config()
+    assert cfg["script"]["max_pages"] == 900
+
+    # Nonsense is ignored rather than crashing the app at startup.
+    monkeypatch.setenv("PAPERPOD_MAX_PAGES", "not a number")
+    assert importlib.reload(config).load_config()["script"]["max_pages"] > 0
+    monkeypatch.delenv("PAPERPOD_MAX_PAGES")
+    importlib.reload(config)
+
+
+def test_the_shipped_limit_stays_under_pros_price_cliff():
+    """Pro's input rate doubles past 200k tokens, which is ~775 pages at the
+    documented ~258 tokens each. Past that the cost shown for an episode reads
+    low, because [costs] carries the single rate."""
+    from config import load_config
+    from pipeline.ingest import API_MAX_PAGES
+
+    limit = load_config()["script"]["max_pages"]
+    assert limit >= 411, "a 400-page government report is not an exotic case"
+    assert limit <= 775, "past this Pro charges double and [costs] understates it"
+    assert limit <= API_MAX_PAGES

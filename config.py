@@ -32,6 +32,14 @@ def load_config() -> dict:
             cfg.setdefault("server", {})["workers"] = max(1, int(workers))
         except ValueError:
             pass
+    # The page ceiling is the knob most likely to be hit by one awkward paper,
+    # and needing a code change and a redeploy to accept a single PDF is a poor
+    # trade. The API's own 1000-page limit still applies underneath.
+    if pages := os.environ.get("PAPERPOD_MAX_PAGES"):
+        try:
+            cfg.setdefault("script", {})["max_pages"] = max(1, int(pages))
+        except ValueError:
+            pass
     # Model choice differs between a laptop on the free tier and a deployed
     # instance, and editing the committed file for that collides with every
     # pull. Environment wins.

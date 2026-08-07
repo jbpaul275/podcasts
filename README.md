@@ -194,7 +194,7 @@ All knobs live in `config.toml`, loaded once at startup.
 - `[intro]` — the spoken AI disclosure that opens every episode. See below.
 - `[script]` — the content-quality knobs:
   - `target_words` (1600 ≈ ten minutes).
-  - `max_pages` — an editorial limit, not a technical one. The API stops at 1000 pages and 50 MB per PDF; each page costs ~258 input tokens and the PDF is sent on both the metadata and the script call. 400 pages is ~103k tokens per call and stays under the 200k mark where Pro's input rate doubles.
+  - `max_pages` — an editorial limit, not a technical one. The API stops at 1000 pages and 50 MB per PDF; each page costs ~258 input tokens and the PDF is sent on both the metadata and the script call. It ships at **775**, the page count at which a single call reaches the 200k input tokens where Pro's rate doubles — a real price cliff rather than a round number, and the point past which `[costs]` would understate what an episode cost. Override with `PAPERPOD_MAX_PAGES` rather than editing the file, so one awkward paper does not need a code change and a redeploy.
   - `thinking_level` — `MINIMAL`/`LOW`/`MEDIUM`/`HIGH`. How hard the model reasons before writing. Scripting is ~2% of an episode's cost, so this is cheap to raise and it is what dense technical papers reward.
   - `grounding` — let the script model search the web. Off by default; see below.
   - `fallback_model` — used if the script model has no quota, rather than failing the episode. The substitution is recorded in the stage log and shown on the episode.
@@ -229,6 +229,12 @@ Saving is never blocked, but an edit that drops something the pipeline depends o
 - **A missing `$PLACEHOLDER`** — whatever it carried simply stops being sent. `$TARGET_WORDS` gone means no length budget; `$SCRIPT` gone means a revision sends no script at all. Neither is visible in the output. The check is derived from the shipped default, so it needs no list to maintain.
 - **`script_system.md` losing `HOST_A`** — every script then fails format validation and the episode fails.
 - **`script_system.md` losing its no-fabrication rule** — the citation flags only catch what slips past that rule; they are not a substitute for it.
+
+### Is the deploy actually current?
+
+A stale deploy has no symptom of its own. A fixed bug reads as unfixed, a raised limit reads as ignored, and the only tell is noticing that an error message is worded the way it was two releases ago — which is exactly how the 120-page limit went on rejecting papers after it had been raised to 400.
+
+So the image carries a build stamp. The Dockerfile writes `/app/BUILD_STAMP` immediately after copying the source in, so the stamp cannot outlive the code it describes, and it appears in the admin sidebar and in `/health` as `build`. If that date predates the change you are looking for, the deploy is the problem and nothing else is.
 
 ## Tests
 
