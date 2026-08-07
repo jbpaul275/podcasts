@@ -37,6 +37,15 @@ grounding = false
 # primary is not, which a pinned preview ID cannot promise.
 fallback_model = "gemini-flash-latest"
 
+# Offered in the "rewrite the script" picker on an episode, so the same paper
+# can be written by different models and compared. The configured script model
+# and the fallback are always included; list extras here. Verify IDs against
+# /admin/models -- a wrong one fails the rewrite with a retirement error.
+models = [
+  "gemini-pro-latest",
+  "gemini-flash-latest",
+]
+
 [tts]
 # Models offered in the upload picker, first one the default. Verify IDs
 # against /admin/models before adding — a wrong ID 404s every chunk.

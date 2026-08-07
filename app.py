@@ -99,7 +99,8 @@ templates.env.globals["static_url"] = static_url
 # Bump when the terms text changes materially.
 TERMS_UPDATED = "6 August 2026"
 
-WORK_Q: "queue.Queue[tuple[str, str | None]]" = queue.Queue()
+# Payload: {"id", "from_stage", "stop_after"}. None is the poison pill.
+WORK_Q: "queue.Queue[dict | None]" = queue.Queue()
 
 # One entry per worker thread, so /health can show what each is doing.
 WORKER_STATE: dict[str, dict] = {}
@@ -122,6 +123,12 @@ def worker_count() -> int:
     is why this is config rather than a large fixed number.
     """
     return max(1, int(CFG.get("server", {}).get("workers", 1)))
+
+
+def enqueue(episode_id: str, from_stage: str | None = None,
+            stop_after: str | None = None) -> None:
+    WORK_Q.put({"id": episode_id, "from_stage": from_stage,
+                "stop_after": stop_after})
 
 
 def _claim(episode_id: str) -> bool:
@@ -155,19 +162,22 @@ def _work_loop(state: dict) -> None:
     while True:
         state["last_beat"] = db.now_iso()
         try:
-            episode_id, from_stage = WORK_Q.get(timeout=5)
+            job = WORK_Q.get(timeout=5)
         except queue.Empty:
             continue
         try:
-            if episode_id is None:
+            if job is None:
                 return  # poison pill: one per worker, used to stop them cleanly
+            episode_id = job["id"]
             if not _claim(episode_id):
                 log.info("episode %s already in flight; skipping duplicate",
                          episode_id)
                 continue
             state["current"] = episode_id
             try:
-                run.run_episode(episode_id, CFG, from_stage=from_stage)
+                run.run_episode(episode_id, CFG,
+                                from_stage=job.get("from_stage"),
+                                stop_after=job.get("stop_after"))
             except Exception:
                 log.exception("worker crashed on episode %s", episode_id)
             finally:
@@ -236,7 +246,7 @@ def _enqueue_path(path: Path, move_to_processed: bool = False) -> str | None:
         _move_to_processed(path)
     if episode_id:
         log.info("queued episode %s from %s", episode_id, path.name)
-        WORK_Q.put((episode_id, None))
+        enqueue(episode_id)
     return episode_id
 
 
@@ -247,7 +257,7 @@ def _requeue_interrupted() -> None:
     for row in db.list_episodes():
         if row["status"] in ("queued", *run.STAGE_NAMES):
             log.info("resuming interrupted episode %s from %s", row["id"], row["status"])
-            WORK_Q.put((row["id"], None))
+            enqueue(row["id"])
 
 
 # --------------------------------------------------------------------------
@@ -266,6 +276,19 @@ def _fmt_duration(seconds) -> str:
 # A running episode is only worrying if it has stopped moving. Chunks land
 # every minute or two, so silence past this means something is wedged.
 STALL_AFTER_S = 15 * 60
+
+
+def _audio_is_stale(row) -> bool:
+    """Audio built before the current script -- it is speaking older words.
+
+    Only meaningful once both timestamps exist; an episode whose script
+    predates this feature has no script_updated_at and is left alone rather
+    than warned about.
+    """
+    built, written = row["audio_built_at"], row["script_updated_at"]
+    if not built or not written:
+        return False
+    return written > built
 
 
 def _progress(row) -> dict | None:
@@ -471,7 +494,11 @@ def _episode_view(row) -> dict:
         "abstract": row["abstract"],
         "venue": _decaps((row["venue"] or "").strip()) or None,
         "status": row["status"],
+        "status_label": (row["status"] or "").replace("_", " "),
         "progress": _progress(row),
+        "script_note": row["script_note"],
+        "can_revert_script": bool((row["script_prev"] or "").strip()),
+        "audio_is_stale": _audio_is_stale(row),
         "error": row["error"],
         "created_at": row["created_at"],
         "duration_s": row["duration_s"],
@@ -522,10 +549,27 @@ def unverified_flag_count(row) -> int:
     return sum(1 for f in flags if not f.get("in_paper"))
 
 
+def _default_retry_stage(row) -> str:
+    """Which stage the retry picker should land on.
+
+    A rewritten script needs audio, not a new script -- defaulting to
+    `extracting` here would regenerate the script and throw the rewrite away,
+    which is the opposite of what the button is for at that moment.
+    """
+    if row["status"] == run.NEEDS_REVIEW or _audio_is_stale(row):
+        return "synthesizing"
+    if row["status"] in run.STAGE_NAMES:
+        return row["status"]
+    return run.STAGE_NAMES[0]
+
+
 def publish_blocker(row) -> str | None:
     """Why this episode cannot go public yet, or None if it can."""
     if row["status"] != "done":
-        return f"episode is {row['status']}, not done"
+        status = (row["status"] or "").replace("_", " ")
+        if row["status"] == run.NEEDS_REVIEW:
+            return "the script was rewritten and the audio has not been rebuilt"
+        return f"episode is {status}, not done"
     if not row["audio_path"] or not Path(row["audio_path"]).exists():
         return "no audio file on disk"
     if unverified_flag_count(row) and not row["flags_reviewed"]:
@@ -732,9 +776,61 @@ def clone_episode(request: Request, episode_id: str, tts_model: str = Form("")):
         script_md=src["script_md"], flags_reviewed=src["flags_reviewed"],
         tts_model=tts_model, status="queued",
     )
-    WORK_Q.put((new_id, "synthesizing"))
+    enqueue(new_id, "synthesizing")
     log.info("cloned %s to %s for TTS model %s", episode_id, new_id, tts_model)
     return RedirectResponse(f"/episode/{new_id}?queued=1", status_code=303)
+
+
+def script_choices() -> list[str]:
+    return script_mod.script_choices(CFG)
+
+
+@app.post("/episode/{episode_id}/rewrite")
+async def rewrite_script(request: Request, episode_id: str):
+    """Rewrite the script -- to notes, to a different model, or both.
+
+    Runs the scripting stage alone and stops. Audio is ~97% of an episode, so
+    re-synthesizing on every wording change would make iteration unaffordable;
+    the existing audio is left in place and marked stale instead.
+    """
+    require_admin(request)
+    ep = db.get_episode(episode_id)
+    if not ep:
+        raise HTTPException(404, "no such episode")
+
+    form = await request.form()
+    mode = (form.get("mode") or "revise").strip()
+    instructions = (form.get("instructions") or "").strip()
+    model = (form.get("script_model") or "").strip()
+
+    if mode not in ("revise", "regenerate"):
+        raise HTTPException(400, f"unknown mode {mode!r}")
+    if model and model not in script_choices():
+        raise HTTPException(400, f"unknown script model {model!r}")
+    if mode == "revise" and not instructions:
+        raise HTTPException(400, "revising needs notes saying what to change")
+    if mode == "revise" and not (ep["script_md"] or "").strip():
+        raise HTTPException(400, "nothing to revise: this episode has no script yet")
+    if ep["status"] in run.STAGE_NAMES:
+        raise HTTPException(409, "this episode is already running; wait for it to finish")
+
+    db.update_episode(episode_id, rewrite_json=json.dumps({
+        "mode": mode, "instructions": instructions, "model": model or None,
+    }), status="queued", error=None)
+    enqueue(episode_id, from_stage="scripting", stop_after="scripting")
+    log.info("queued %s rewrite of %s (model=%s)", mode, episode_id, model or "default")
+    return RedirectResponse(f"/episode/{episode_id}?queued=1", status_code=303)
+
+
+@app.post("/episode/{episode_id}/script/revert")
+def revert_script(request: Request, episode_id: str):
+    """Undo the last rewrite. One step back is enough to escape a bad edit."""
+    require_admin(request)
+    if not db.get_episode(episode_id):
+        raise HTTPException(404, "no such episode")
+    if not db.restore_script(episode_id):
+        raise HTTPException(400, "no previous script to restore")
+    return RedirectResponse(f"/episode/{episode_id}", status_code=303)
 
 
 @app.get("/terms", response_class=HTMLResponse)
@@ -846,8 +942,10 @@ def episode_page(request: Request, episode_id: str):
             "lines": _script_lines(row["script_md"], view["flags"]) if row["script_md"] else [],
             "stages": stages,
             "retry_stages": run.STAGE_NAMES,
+            "default_retry_stage": _default_retry_stage(row),
             "publish_blocker": publish_blocker(row) if admin_mode else None,
             "tts_choices": tts_choices(),
+            "script_choices": script_choices(),
             "versions": versions,
         },
     )
@@ -928,7 +1026,7 @@ def retry(request: Request, episode_id: str, stage: str = Form("extracting")):
     if stage not in run.STAGE_NAMES:
         raise HTTPException(400, f"unknown stage {stage!r}")
     db.update_episode(episode_id, status="queued", error=None)
-    WORK_Q.put((episode_id, stage))
+    enqueue(episode_id, stage)
     return RedirectResponse(f"/episode/{episode_id}", status_code=303)
 
 

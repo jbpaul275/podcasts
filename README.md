@@ -41,6 +41,17 @@ The episode page shows the player, the full script with per-speaker styling, the
 
 A running episode shows what it is doing (`synthesizing chunk 3 of 12`) and how long it has been doing it, on both the episode page and the admin queue. TTS is the long stage: chunks land every minute or two, so the timestamp is the signal, not the stage name. Past 15 minutes with no movement the line turns red and reads *stalled* — retry the stage from the episode page, which keeps every chunk already on disk and re-synthesizes only what is missing.
 
+### Rewriting a script
+
+An episode with a script has a **Rewrite the script** panel. Two buttons:
+
+- **Revise this script** takes plain-English notes ("cut the instrument, spend more time on section 5") and edits what is there, leaving passages the notes do not mention intact. The paper goes along with the request, so asking for more on a section it covers actually gets you more rather than padding.
+- **Start over from the paper** ignores the current script and writes a fresh one. Your notes still apply as extra direction. This is also how you try a different model on the same paper — pick from the model dropdown, which is fed by `[script] models`.
+
+Both run the scripting stage **and stop**. Audio is ~97% of an episode's cost, so re-synthesizing on every wording change would make iteration unaffordable; the existing audio is left alone and the episode goes to `needs_review`. When the script reads right, re-run from `synthesizing` — the retry picker already defaults there.
+
+The previous script is kept for a one-step undo. An episode whose script is newer than its audio says so at the top of the page, because otherwise the player quietly serves words nobody approved.
+
 ### Citation flags
 
 The script prompt forbids fabricated citations, but models fabricate anyway. After generation, the script is regex-scanned for citation-shaped strings — `Name (Year)`, `et al.`, and proper nouns sitting near a bare four-digit year — and every hit is surfaced on the episode page, both as a summary box and inline on the offending line.
