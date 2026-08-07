@@ -46,6 +46,21 @@ def load_config() -> dict:
     return cfg
 
 
+def categories(cfg: dict) -> list[dict]:
+    """The tag vocabulary, in config order. Order is editorial: it is the order
+    the filter chips appear in."""
+    out = []
+    for c in cfg.get("categories") or []:
+        slug = str(c.get("slug") or "").strip()
+        if slug:
+            out.append({"slug": slug, "label": str(c.get("label") or slug).strip()})
+    return out
+
+
+def category_labels(cfg: dict) -> dict[str, str]:
+    return {c["slug"]: c["label"] for c in categories(cfg)}
+
+
 # Edited prompts live on the data volume, not next to the shipped defaults: the
 # repo copy is baked into the image and a redeploy would wipe anything written
 # there. Keeping them here also means the defaults stay readable as the thing

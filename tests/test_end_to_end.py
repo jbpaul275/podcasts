@@ -156,6 +156,14 @@ def env(tmp_path, monkeypatch):
         "server": {"base_url": "http://paperpod.test:8000", "port": 8000},
         "feed": {"title": "Paperpod", "description": "Test feed", "author": "Paperpod"},
         "costs": {},
+        "categories": [
+            {"slug": "ai", "label": "AI"},
+            {"slug": "economics", "label": "Economics"},
+            {"slug": "history", "label": "History"},
+            {"slug": "science", "label": "Science"},
+            {"slug": "policy", "label": "Policy"},
+            {"slug": "classic", "label": "Classic"},
+        ],
     }
     return {"tmp": tmp_path, "cfg": cfg, "calls": calls, "papers": papers,
             "chunks": chunks, "final": final}
@@ -2419,3 +2427,112 @@ def test_an_unknown_done_key_renders_nothing(client, env, tmp_path):
     episode_id = _scripted_episode(env, tmp_path, "dk.pdf")
     body = client.get(f"/episode/{episode_id}?done=<script>alert(1)</script>").text
     assert "alert(1)" not in body
+
+
+# --------------------------------------------------------------- categories
+
+def _tagged(env, tmp_path, name, tags, published=True):
+    import db
+    from pipeline import ingest
+
+    pdf = tmp_path / name
+    _make_pdf(pdf)
+    eid = ingest.ingest_pdf(pdf, env["cfg"])
+    db.update_episode(eid, status="done", published=1 if published else 0,
+                      flags_reviewed=1, title=name,
+                      categories=json.dumps(tags))
+    return eid
+
+
+def test_an_episode_can_carry_several_categories(client, env, tmp_path):
+    """The whole reason for multi-tag: a classic AI paper is genuinely both,
+    and a single choice would hide it from one of the two filters."""
+    import db
+    import app as app_mod
+
+    eid = _tagged(env, tmp_path, "both.pdf", ["ai", "classic"])
+    view = app_mod._episode_view(db.get_episode(eid))
+    assert view["categories"] == ["ai", "classic"]
+
+    for slug in ("ai", "classic"):
+        assert "both.pdf" in client.get(f"/?category={slug}").text, slug
+
+
+def test_filtering_narrows_the_list(client, env, tmp_path):
+    _tagged(env, tmp_path, "ai-one.pdf", ["ai"])
+    _tagged(env, tmp_path, "hist-one.pdf", ["history"])
+
+    body = client.get("/?category=ai").text
+    assert "ai-one.pdf" in body and "hist-one.pdf" not in body
+
+    both = client.get("/").text
+    assert "ai-one.pdf" in both and "hist-one.pdf" in both
+
+
+def test_chips_only_show_categories_with_episodes(client, env, tmp_path):
+    """An empty chip is a dead end -- it invites a click that lands on nothing."""
+    _tagged(env, tmp_path, "only-ai.pdf", ["ai"])
+    body = client.get("/").text
+    assert ">AI<" in body
+    assert ">Policy<" not in body, "no episode is tagged policy"
+
+
+def test_chip_counts_match_what_is_rendered(client, env, tmp_path):
+    _tagged(env, tmp_path, "a.pdf", ["ai"])
+    _tagged(env, tmp_path, "b.pdf", ["ai", "classic"])
+    body = client.get("/").text
+    # 2 under AI, 1 under Classic, 2 in All.
+    assert 'AI<span class="chipn">2</span>' in body
+    assert 'Classic<span class="chipn">1</span>' in body
+    assert 'All<span class="chipn">2</span>' in body
+
+
+def test_an_unknown_category_shows_everything(client, env, tmp_path):
+    """`category` comes from the query string; a bad one must not empty the site."""
+    _tagged(env, tmp_path, "x.pdf", ["ai"])
+    body = client.get("/?category=<script>nope</script>").text
+    assert "x.pdf" in body
+    assert "nope" not in body
+
+
+def test_the_public_filter_still_hides_private_episodes(client, env, tmp_path):
+    """Filtering must not become a way around publication."""
+    _tagged(env, tmp_path, "secret.pdf", ["ai"], published=False)
+    assert "secret.pdf" not in client.get("/?category=ai").text
+
+
+def test_only_known_slugs_are_stored(env):
+    """A tag the site has no filter for would silently drop the episode out of
+    every list it should appear in."""
+    from pipeline.ingest import clean_categories
+
+    assert clean_categories(["AI", "made-up", "classic"], env["cfg"]) == ["ai", "classic"]
+    assert clean_categories("not a list", env["cfg"]) == []
+    assert clean_categories(None, env["cfg"]) == []
+
+
+def test_categories_are_editable_in_the_admin(client, env, tmp_path):
+    import db
+
+    eid = _tagged(env, tmp_path, "edit.pdf", ["ai"])
+    client.post(f"/episode/{eid}/edit",
+                data={"categories_submitted": "1", "categories": ["history", "classic"]})
+    assert db.episode_categories(db.get_episode(eid)) == ["history", "classic"]
+
+    # Clearing every box sends no "categories" key at all -- the hidden marker
+    # is what distinguishes that from a form with no tag fields.
+    client.post(f"/episode/{eid}/edit", data={"categories_submitted": "1"})
+    assert db.episode_categories(db.get_episode(eid)) == []
+
+    # A form without the marker leaves them alone.
+    db.update_episode(eid, categories=json.dumps(["ai"]))
+    client.post(f"/episode/{eid}/edit", data={"summary": "Just the summary."})
+    assert db.episode_categories(db.get_episode(eid)) == ["ai"]
+
+
+def test_the_metadata_prompt_offers_only_configured_slugs(env):
+    from pipeline.ingest import _metadata_prompt
+
+    prompt = _metadata_prompt(env["cfg"])
+    assert '"ai" — AI' in prompt
+    assert "$CATEGORIES" not in prompt, "the placeholder must be substituted"

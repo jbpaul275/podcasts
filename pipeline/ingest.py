@@ -16,7 +16,7 @@ from pathlib import Path
 import fitz  # pymupdf
 
 import db
-from config import PAPERS_DIR, load_prompt
+from config import PAPERS_DIR, categories, load_prompt
 from . import DuplicateEpisode, PipelineError
 from .gemini import call_with_retry, client, pdf_part, record_cost, strip_fences
 
@@ -70,6 +70,27 @@ def ingest_pdf(path: str | Path, cfg: dict) -> str:
     return episode_id
 
 
+def _metadata_prompt(cfg: dict) -> str:
+    """The metadata prompt with the tag vocabulary spliced in, so the model can
+    only choose from slugs the site actually has filters for."""
+    vocab = "\n".join(f'  - "{c["slug"]}" — {c["label"]}' for c in categories(cfg))
+    return load_prompt("metadata.md").replace(
+        "$CATEGORIES", vocab or "  (no categories configured; return [])")
+
+
+def clean_categories(values, cfg: dict) -> list[str]:
+    """Keep only slugs the config knows, in config order.
+
+    The model is asked for slugs from a list and mostly complies, but an
+    invented tag would show up nowhere and silently drop the episode out of
+    every filter -- so anything unrecognised is dropped here rather than stored.
+    """
+    if not isinstance(values, list):
+        return []
+    wanted = {str(v).strip().casefold() for v in values}
+    return [c["slug"] for c in categories(cfg) if c["slug"].casefold() in wanted]
+
+
 def extract_metadata(episode_id: str, cfg: dict) -> None:
     """Stage 'extracting': native-PDF metadata extraction with strict JSON output."""
     pdf_path = PAPERS_DIR / f"{episode_id}.pdf"
@@ -82,7 +103,7 @@ def extract_metadata(episode_id: str, cfg: dict) -> None:
     resp = call_with_retry(
         lambda: client().models.generate_content(
             model=model,
-            contents=[pdf_part(pdf_path), load_prompt("metadata.md")],
+            contents=[pdf_part(pdf_path), _metadata_prompt(cfg)],
             config=types.GenerateContentConfig(response_mime_type="application/json"),
         ),
         cfg, model, label="metadata extraction",
@@ -111,5 +132,6 @@ def extract_metadata(episode_id: str, cfg: dict) -> None:
         year=year,
         abstract=(meta.get("abstract") or "").strip() or None,
         summary=(meta.get("summary") or "").strip() or None,
+        categories=json.dumps(clean_categories(meta.get("categories"), cfg)),
         venue=(meta.get("venue_or_series") or "") or None,
     )

@@ -52,6 +52,18 @@ Both run the scripting stage **and stop**. Audio is ~97% of an episode's cost, s
 
 The previous script is kept for a one-step undo. An episode whose script is newer than its audio says so at the top of the page, because otherwise the player quietly serves words nobody approved.
 
+### Categories
+
+`[[categories]]` in `config.toml` is a fixed tag vocabulary — a slug (stored, and what appears in URLs) and a label (displayed). At library scale, free text costs more than it gives: `AI` / `ai` / `Machine Learning` become three tags for one idea and the filter stops meaning anything.
+
+**An episode can carry several.** That is deliberate. "Classic" and "AI" are different axes — a classic AI paper is genuinely both, and forcing one choice hides it from whichever filter someone actually looks under. Multi-tag dissolves the problem without modelling a taxonomy.
+
+The metadata stage suggests tags from the vocabulary while it is already reading the PDF, so new papers arrive tagged. Anything it returns that is not a configured slug is dropped rather than stored — an unknown tag would show up in no filter and silently take the episode out of every list it belongs in. Correct them per-episode in the admin.
+
+The public page filters via `?category=<slug>`: real links, so each filter is shareable, bookmarkable, and works with the back button. Chips appear only for categories that have episodes, with counts taken from the same list being rendered.
+
+Renaming a label is free. Changing a slug orphans every episode already tagged with it.
+
 ### Citation flags
 
 The script prompt forbids fabricated citations, but models fabricate anyway. After generation, the script is regex-scanned for citation-shaped strings — `Name (Year)`, `et al.`, and proper nouns sitting near a bare four-digit year — and every hit is surfaced on the episode page, both as a summary box and inline on the offending line.

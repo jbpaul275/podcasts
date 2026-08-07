@@ -39,6 +39,8 @@ from config import (
     PAPERS_DIR,
     PROCESSED_DIR,
     ROOT,
+    categories,
+    category_labels,
     is_prompt_name,
     load_config,
     prompt_default,
@@ -497,6 +499,9 @@ def _episode_view(row) -> dict:
         "grounding": db.grounding(row),
         "script_md_present": bool(row["script_md"]),
         "summary": _blurb(row),
+        "categories": db.episode_categories(row),
+        "category_labels": [category_labels(CFG).get(c, c)
+                            for c in db.episode_categories(row)],
         "authors": authors,
         "year": row["year"],
         "abstract": row["abstract"],
@@ -673,10 +678,11 @@ def logout():
 
 
 @app.get("/admin", response_class=HTMLResponse)
-def admin(request: Request, error: str = ""):
+def admin(request: Request, error: str = "", category: str = ""):
     if not auth.is_admin(request):
         return RedirectResponse("/admin/login", status_code=303)
-    return _render_library(request, admin_mode=True, error=error)
+    return _render_library(request, admin_mode=True, error=error,
+                           category=category)
 
 
 @app.post("/episode/{episode_id}/edit")
@@ -710,6 +716,12 @@ async def edit_episode(request: Request, episode_id: str):
     if "authors" in form:
         names = [" ".join(a.split()) for a in str(form["authors"]).split(",")]
         fields["authors"] = json.dumps([a for a in names if a])
+    if "categories_submitted" in form:
+        # Checkboxes send nothing when all are cleared, so a hidden marker is
+        # what separates "untag everything" from "this form has no tag fields".
+        chosen = set(form.getlist("categories"))
+        fields["categories"] = json.dumps(
+            [c["slug"] for c in categories(CFG) if c["slug"] in chosen])
     if "source_url" in form:
         fields["source_url"] = safe_url(str(form["source_url"]))
     if "year" in form:
@@ -958,20 +970,47 @@ def terms(request: Request):
 
 
 @app.get("/", response_class=HTMLResponse)
-def library(request: Request):
-    return _render_library(request, admin_mode=False)
+def library(request: Request, category: str = ""):
+    return _render_library(request, admin_mode=False, category=category)
 
 
-def _render_library(request: Request, admin_mode: bool, error: str = ""):
+def _category_chips(episodes: list[dict], selected: str) -> list[dict]:
+    """The filter row: only tags that actually have episodes behind them.
+
+    An empty category is a dead end -- showing it invites a click that lands on
+    "nothing here". Counts come from the same list being rendered, so the
+    numbers can never disagree with the page.
+    """
+    counts: dict[str, int] = {}
+    for ep in episodes:
+        for slug in ep["categories"]:
+            counts[slug] = counts.get(slug, 0) + 1
+    chips = [{"slug": "", "label": "All", "count": len(episodes),
+              "selected": not selected}]
+    for c in categories(CFG):
+        if counts.get(c["slug"]):
+            chips.append({**c, "count": counts[c["slug"]],
+                          "selected": c["slug"] == selected})
+    # A row with only "All" in it is chrome, not navigation.
+    return chips if len(chips) > 1 else []
+
+
+def _render_library(request: Request, admin_mode: bool, error: str = "",
+                    category: str = ""):
     all_episodes = [
         _episode_view(r) for r in db.list_episodes(published_only=not admin_mode)
     ]
+    known = {c["slug"] for c in categories(CFG)}
+    category = category if category in known else ""
     # Failures are moved out of the reading list: they are maintenance, not
     # something to browse. They stay reachable, collapsed, below the fold.
     episodes = [e for e in all_episodes if e["status"] != "failed"]
     failed = ([{**e, "short_error": _short_error(e["error"])}
                for e in all_episodes if e["status"] == "failed"]
               if admin_mode else [])
+    chips = _category_chips(episodes, category)
+    if category:
+        episodes = [e for e in episodes if category in e["categories"]]
     return templates.TemplateResponse(
         request,
         "library.html",
@@ -984,6 +1023,9 @@ def _render_library(request: Request, admin_mode: bool, error: str = ""):
             "queue": [e for e in all_episodes if e["status"] in run.STAGE_NAMES
                       or e["status"] == "queued"],
             "workers": worker_count(),
+            "chips": chips,
+            "category": category,
+            "category_label": category_labels(CFG).get(category, ""),
             "error": error,
             "total_cost": sum(e["cost_usd"] for e in all_episodes),
             "feed_url": CFG["server"]["base_url"].rstrip("/") + "/feed.xml",
@@ -1054,6 +1096,7 @@ def episode_page(request: Request, episode_id: str, done: str = ""):
             "publish_blocker": publish_blocker(row) if admin_mode else None,
             "tts_choices": tts_choices(),
             "script_choices": script_choices(),
+            "all_categories": categories(CFG),
             "versions": versions,
         },
     )

@@ -46,6 +46,40 @@ models = [
   "gemini-flash-latest",
 ]
 
+# Tags for browsing the library. Deliberately a fixed vocabulary rather than
+# free text: at this size typos and near-duplicates ("AI" / "ai" / "Machine
+# Learning") cost more than the flexibility is worth.
+#
+# An episode can carry several. That is what lets "Classic" and "AI" coexist --
+# a classic AI paper is genuinely both, and forcing a single choice would hide
+# it from one of the two filters someone would look under.
+#
+# The slug is what is stored and what appears in URLs, so renaming a label is
+# free but changing a slug orphans the episodes already tagged with it.
+[[categories]]
+slug  = "ai"
+label = "AI"
+
+[[categories]]
+slug  = "economics"
+label = "Economics"
+
+[[categories]]
+slug  = "history"
+label = "History"
+
+[[categories]]
+slug  = "science"
+label = "Science"
+
+[[categories]]
+slug  = "policy"
+label = "Policy"
+
+[[categories]]
+slug  = "classic"
+label = "Classic"
+
 [tts]
 # Models offered in the upload picker, first one the default. Verify IDs
 # against /admin/models before adding — a wrong ID 404s every chunk.

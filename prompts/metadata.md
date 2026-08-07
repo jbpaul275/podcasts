@@ -2,7 +2,7 @@ Extract bibliographic metadata from the attached academic paper.
 
 Respond with strict JSON only — no prose, no markdown, no code fences. Use exactly this shape:
 
-{"title": "...", "authors": ["...", "..."], "year": 2020, "abstract": "...", "summary": "...", "venue_or_series": "..."}
+{"title": "...", "authors": ["...", "..."], "year": 2020, "abstract": "...", "summary": "...", "venue_or_series": "...", "categories": ["...", "..."]}
 
 Rules:
 - "title": the paper's full title as printed.
@@ -11,4 +11,7 @@ Rules:
 - "abstract": the paper's own abstract verbatim. If there is no labeled abstract, write a one-paragraph neutral summary of the introduction and set it anyway.
 - "summary": one or two sentences, maximum 45 words, for a listing page. Plain language a curious non-specialist would understand — no jargon, no methodology names, no citation. Say what question the paper asks and what it found. Write it as a teaser, not an abstract: lead with the finding or the stake, never with "This paper examines".
 - "venue_or_series": journal, conference, or working-paper series (e.g. "NBER Working Paper"), or null.
+- "categories": which of these the paper belongs under, as an array of the slugs exactly as written:
+$CATEGORIES
+  Pick every one that genuinely applies and no more — usually one or two. These are browsing tags, so the test is whether someone looking for that subject would want this paper in the list, not whether the word appears in it. Return an empty array if none fit; a wrong tag is worse than no tag.
 - Output nothing before or after the JSON object.

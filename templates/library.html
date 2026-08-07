@@ -12,6 +12,18 @@
   <p class="blurb">{{ feed_description }}</p>
 </div>
 
+{% if chips %}
+  {# Real links, not JS: each filter is shareable, bookmarkable, and works
+     with the back button. #}
+  <nav class="chips" aria-label="Filter by category">
+    {% for c in chips %}
+      <a class="chip{{ ' on' if c.selected }}"
+         href="{{ (admin and '/admin' or '/') ~ (c.slug and ('?category=' ~ c.slug) or '') }}"
+         {% if c.selected %}aria-current="true"{% endif %}>{{ c.label }}<span class="chipn">{{ c.count }}</span></a>
+    {% endfor %}
+  </nav>
+{% endif %}
+
 {% if admin and error %}<p class="error flash">{{ error }}</p>{% endif %}
 
 <ul class="posts">
@@ -36,6 +48,7 @@
       {% if ep.status != 'done' %}<span class="status status-{{ ep.status }}">{{ ep.status_label or ep.status }}</span>{% endif %}
       {% if admin %}<span class="status status-{{ 'done' if ep.published else 'queued' }}">{{ 'public' if ep.published else 'private' }}</span>{% endif %}
       {% if admin and ep.flag_count %}<a class="flagcount" href="/episode/{{ ep.id }}#flags">{{ ep.flag_count }} flag{{ '' if ep.flag_count == 1 else 's' }}</a>{% endif %}
+      {% for c in ep.category_labels %}<span class="tag">{{ c }}</span>{% endfor %}
     </p>
   </li>
 {% endfor %}
@@ -43,7 +56,9 @@
 
 {% if not episodes %}
   <p class="empty">
-    {%- if not admin -%}
+    {%- if category -%}
+      Nothing under {{ category_label }} yet. <a href="{{ admin and '/admin' or '/' }}">Show everything</a>.
+    {%- elif not admin -%}
       No episodes published yet.
     {%- elif failed -%}
       No finished episodes yet — see the failures below.
