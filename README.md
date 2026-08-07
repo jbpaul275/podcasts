@@ -122,7 +122,13 @@ Confirmed in use:
 
 - `gemini-3.1-flash-tts-preview` supports **at most two speakers** and returns **24 kHz 16-bit mono PCM** — which is why `tts.py` parses the sample rate out of the response MIME type and wraps the PCM in a WAV header rather than guessing.
 - Every type used (`SpeechConfig`, `MultiSpeakerVoiceConfig`, `SpeakerVoiceConfig`, `VoiceConfig`, `PrebuiltVoiceConfig`) exists in the SDK with the field names used here.
-- `gemini-3-flash-preview` works for metadata and scripting. `gemini-3-pro-preview` returned `limit: 0` on a paid key, so preview Pro appears to need separate access.
+- `gemini-3-flash-preview` works for metadata and scripting. `gemini-3-pro-preview` returned `limit: 0` on a paid key, so preview Pro appears to need separate access — and was later withdrawn entirely.
+
+### Why the text models are aliases
+
+`[models] metadata` and `script` point at `gemini-flash-latest` and `gemini-pro-latest` rather than dated preview IDs. `gemini-3-pro-preview` was withdrawn while `models.list()` still advertised it, and every episode 404'd until someone noticed — so the catalogue proves a model *existed*, not that it works. Google repoints the aliases, which turns a retirement into a quality change rather than an outage.
+
+The trade-offs are real: an alias can move under you, so output is not reproducible across time, and the model behind it may be repriced without `[costs]` noticing. Pin a dated ID if you need reproducibility, and accept that you are then responsible for retirements. TTS has no alias, so it stays pinned — check `/admin/models` when it starts 404ing.
 
 ### Which TTS models work
 
