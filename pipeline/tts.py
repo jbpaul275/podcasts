@@ -88,12 +88,16 @@ def synthesize(episode_id: str, cfg: dict) -> None:
 
     failed = []
     last_error: Exception | None = None
+    total = len(manifest)
     for entry in manifest:
         seq = entry["seq"]
         wav_path = out_dir / f"{seq:03d}.wav"
         if wav_path.exists() and wav_path.stat().st_size > 44:
             log.info("chunk %03d already synthesized, skipping", seq)
             continue
+        # Written before the call, not after: a stalled chunk is exactly the
+        # case you want to see, and its timestamp is what shows it stalled.
+        db.set_progress(episode_id, f"synthesizing chunk {seq + 1} of {total}")
         try:
             _synthesize_chunk(episode_id, entry, wav_path, cfg)
         except QuotaUnavailable:

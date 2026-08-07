@@ -54,6 +54,10 @@ context_turns      = 2
 attempts     = 4
 base_delay_s = 2
 max_delay_s  = 60
+# Ceiling on a single API call. Without one a stalled connection blocks its
+# worker forever: the episode sits in "synthesizing" with no error, and with
+# one worker nothing behind it ever starts. Timeouts count as retryable.
+request_timeout_s = 600
 
 [audio]
 seam_silence_ms = 250
@@ -65,6 +69,12 @@ bitrate         = "96k"
 [server]
 base_url = "http://localhost:8000"
 port     = 8000
+# How many episodes to process at once. The pipeline spends nearly all its
+# time waiting on Gemini, so extra workers cost almost no CPU -- the real
+# ceilings are the account's requests-per-minute and disk headroom during
+# assembly, which briefly needs ~2x an episode's chunk audio. Raise slowly
+# and watch for 429s.
+workers  = 2
 
 [feed]
 title       = "Paperpod"

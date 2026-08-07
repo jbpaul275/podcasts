@@ -91,6 +91,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
                        ("cost_json", "TEXT"), ("source_url", "TEXT"), ("tts_model", "TEXT"), ("audio_built_at", "TEXT"), ("script_model", "TEXT"),
                        ("grounding_json", "TEXT"),
                        ("published", "INTEGER DEFAULT 0"),
+                       ("progress", "TEXT"),
+                       ("progress_at", "TEXT"),
                        ("flags_reviewed", "INTEGER DEFAULT 0")):
         if name not in cols:
             conn.execute(f"ALTER TABLE episode ADD COLUMN {name} {decl}")
@@ -165,6 +167,15 @@ def update_episode(id: str, **fields) -> None:
     cols = ", ".join(f"{k} = ?" for k in fields)
     conn.execute(f"UPDATE episode SET {cols} WHERE id = ?", (*fields.values(), id))
     conn.commit()
+
+
+def set_progress(id: str, note: str | None) -> None:
+    """A human-readable note on what a running stage is doing right now.
+
+    Timestamped, because the useful question about a long-running episode is
+    not "how far along" but "is it still moving".
+    """
+    update_episode(id, progress=note, progress_at=now_iso() if note else None)
 
 
 def add_cost(id: str, usd: float, stage: str = "other") -> None:

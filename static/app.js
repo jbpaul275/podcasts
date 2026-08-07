@@ -93,7 +93,9 @@
       .then((h) => {
         const bits = [];
         if (!h.worker_alive) bits.push("worker down");
-        if (h.worker_current) bits.push("processing");
+        // An array, so check length -- an empty one is still truthy.
+        const busy = (h.worker_current || []).length;
+        if (busy) bits.push(busy > 1 ? `processing ${busy}` : "processing");
         if (h.queue_depth) bits.push(h.queue_depth + " queued");
         health.textContent = bits.join(" · ");
         health.classList.toggle("bad", !h.worker_alive);

@@ -24,6 +24,13 @@ def load_config() -> dict:
         cfg.setdefault("server", {})["base_url"] = base_url
     if port := os.environ.get("PORT"):
         cfg.setdefault("server", {})["port"] = int(port)
+    # Concurrency is a property of the deployment -- the account's rate limits
+    # and the machine's size -- so it is tunable without a code change.
+    if workers := os.environ.get("PAPERPOD_WORKERS"):
+        try:
+            cfg.setdefault("server", {})["workers"] = max(1, int(workers))
+        except ValueError:
+            pass
     # Model choice differs between a laptop on the free tier and a deployed
     # instance, and editing the committed file for that collides with every
     # pull. Environment wins.
