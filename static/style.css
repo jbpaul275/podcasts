@@ -308,3 +308,30 @@ ul.plain { list-style: none; padding: 0; margin: 0 0 0.5rem; }
 .sources li { margin-bottom: 0.35rem; font-size: 0.88rem; line-height: 1.45; }
 .sources li .muted { display: block; font-size: 0.78rem; }
 .sources .queries { margin-top: 0.8rem; font-size: 0.8rem; line-height: 1.6; }
+
+/* prompt editor */
+.promptbox { border: 1px solid var(--rule); border-radius: 8px; background: var(--card); padding: 1rem 1.1rem; margin-bottom: 1rem; }
+.promptbox > summary { cursor: pointer; display: flex; align-items: center; gap: 0.6rem; }
+.promptbox textarea {
+  width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.82rem; line-height: 1.55; padding: 0.7rem; margin-top: 0.8rem;
+  border: 1px solid var(--rule); border-radius: 6px; background: var(--bg); color: var(--ink);
+}
+.promptname { display: block; }
+.promptbox .usedby { display: block; color: var(--muted); font-size: 0.85rem; line-height: 1.5; margin-top: 0.25rem; }
+.promptdefault { margin-top: 1rem; }
+.promptdefault summary { cursor: pointer; color: var(--muted); font-size: 0.82rem; }
+.promptdefault pre {
+  white-space: pre-wrap; font-size: 0.78rem; line-height: 1.5; color: var(--muted);
+  background: var(--bg); border: 1px solid var(--rule); border-radius: 6px; padding: 0.7rem; margin-top: 0.6rem;
+}
+.promptwarn {
+  border-left: 3px solid var(--flag); background: #fffbf3; padding: 0.75rem 0.9rem;
+  border-radius: 0 8px 8px 0; margin-top: 0.8rem; font-size: 0.88rem;
+}
+.promptwarn ul { margin: 0.5rem 0; padding-left: 1.1rem; }
+.promptwarn p { margin: 0.5rem 0 0; color: var(--muted); }
+@media (prefers-color-scheme: dark) { .promptwarn { background: #2a2417; } }
+.flash.ok { background: #e7f4ec; color: #1a7f45; }
+@media (prefers-color-scheme: dark) { .flash.ok { background: #16281d; } }
+.backlink { margin-top: 2rem; }

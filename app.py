@@ -39,7 +39,14 @@ from config import (
     PAPERS_DIR,
     PROCESSED_DIR,
     ROOT,
+    is_prompt_name,
     load_config,
+    prompt_default,
+    prompt_names,
+    prompt_override,
+    prompt_warnings,
+    reset_prompt,
+    save_prompt,
 )
 from pipeline import DuplicateEpisode, PipelineError, gemini, ingest, run, script as script_mod
 
@@ -654,6 +661,77 @@ def tts_choices() -> list[str]:
     listed = CFG.get("tts", {}).get("models") or []
     default = CFG["models"]["tts"]
     return list(dict.fromkeys([*listed, default]))
+
+
+PROMPT_USED_BY = {
+    "metadata.md": "Reading title, authors, year and abstract off the PDF.",
+    "script_system.md": "The system instruction for every script. The segment "
+                        "arc, the hard constraints and the house style all live "
+                        "here — this is the main quality lever.",
+    "script_user.md": "The per-episode request that carries the length budget.",
+    "script_grounding.md": "Appended to the system instruction only when "
+                           "[script] grounding is on.",
+    "script_revise.md": "Rewriting an existing script to an editor's notes.",
+    "episode_title.md": "Naming the finished episode.",
+}
+
+
+def _prompt_view(name: str) -> dict:
+    override = prompt_override(name)
+    body = override if override is not None else prompt_default(name)
+    return {
+        "name": name,
+        "body": body,
+        "default": prompt_default(name),
+        "edited": override is not None,
+        "used_by": PROMPT_USED_BY.get(name, ""),
+        "warnings": prompt_warnings(name, body) if override is not None else [],
+    }
+
+
+@app.get("/admin/prompts", response_class=HTMLResponse)
+def admin_prompts(request: Request, saved: str = "", reset: str = ""):
+    """Edit the prompts without a redeploy.
+
+    They are read at call time, so a save takes effect on the next episode.
+    Edits land on the data volume rather than over the shipped files, which
+    keeps the default available as something an edit can always be reverted to.
+    """
+    if not auth.is_admin(request):
+        return RedirectResponse("/admin/login", status_code=303)
+    return templates.TemplateResponse(
+        request, "prompts.html",
+        {"admin": True, "signed_in": True,
+         "prompts": [_prompt_view(n) for n in prompt_names()],
+         "saved": saved, "reset": reset,
+         "feed_title": CFG.get("feed", {}).get("title", "Paperpod")},
+    )
+
+
+@app.post("/admin/prompts/{name}")
+async def save_prompt_route(request: Request, name: str):
+    require_admin(request)
+    # `name` arrives from the URL. Anything not on the shipped allowlist must
+    # never reach a filesystem path.
+    if not is_prompt_name(name):
+        raise HTTPException(404, "no such prompt")
+    form = await request.form()
+    if form.get("action") == "reset":
+        reset_prompt(name)
+        log.info("prompt %s reset to the shipped default", name)
+        return RedirectResponse(f"/admin/prompts?reset={quote(name)}#{name}",
+                                status_code=303)
+
+    body = (form.get("body") or "")
+    if body.replace("\r\n", "\n").strip() == prompt_default(name).strip():
+        # Saving the default verbatim is a reset; keeping it as an override
+        # would just freeze this copy against future upstream edits.
+        reset_prompt(name)
+    else:
+        save_prompt(name, body.replace("\r\n", "\n"))
+    log.info("prompt %s updated", name)
+    return RedirectResponse(f"/admin/prompts?saved={quote(name)}#{name}",
+                            status_code=303)
 
 
 @app.get("/admin/models", response_class=HTMLResponse)

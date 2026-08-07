@@ -106,6 +106,18 @@ All knobs live in `config.toml`, loaded once at startup.
 
 Prompts live in `prompts/` as plain Markdown, loaded at call time rather than baked into Python. `script_system.md` is the main quality lever — edit it freely without touching code.
 
+### Editing prompts from the browser
+
+`/admin/prompts` edits every prompt in place. They are read at call time, so a save takes effect on the next episode with no redeploy and no restart.
+
+Edits are written to `$PAPERPOD_DATA_DIR/prompts/`, not over the files in `prompts/`. Two reasons: the repo copy is baked into the container image, so a redeploy would wipe anything written there; and keeping them separate means the shipped default stays readable as the thing an edit can always be reverted to. Saving the default back verbatim is treated as a revert, so an unmodified copy never freezes against future upstream edits.
+
+Saving is never blocked, but an edit that drops something the pipeline depends on says so:
+
+- **A missing `$PLACEHOLDER`** — whatever it carried simply stops being sent. `$TARGET_WORDS` gone means no length budget; `$SCRIPT` gone means a revision sends no script at all. Neither is visible in the output. The check is derived from the shipped default, so it needs no list to maintain.
+- **`script_system.md` losing `HOST_A`** — every script then fails format validation and the episode fails.
+- **`script_system.md` losing its no-fabrication rule** — the citation flags only catch what slips past that rule; they are not a substitute for it.
+
 ## Tests
 
 ```bash
