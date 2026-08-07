@@ -148,6 +148,19 @@ workers  = 2
 title       = "Paperpod"
 description = "AI Generated Podcast Discussions of Important Papers."
 author      = "Paperpod"
+# Directory submission checks these. `category` must be spelled exactly as in
+# Apple's own list (Science, Technology, Education, Business, History, ...);
+# an unrecognised one is a rejection, not a warning. `subcategory` is optional
+# and must belong to that category.
+category    = "Science"
+subcategory = "Social Sciences"
+language    = "en-us"
+# Whether the show contains profanity. Marking this false when it is true gets
+# a show permanently removed, so it is a declaration rather than a preference.
+explicit    = false
+# "episodic" (newest first, order does not matter) or "serial" (start at 1).
+type        = "episodic"
+copyright   = "Episode audio © Josh Paul. Source papers remain the property of their authors."
 
 [site]
 # Shown on the terms page and used as the podcast owner contact in the feed.

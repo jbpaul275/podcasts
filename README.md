@@ -108,6 +108,23 @@ Matching is on names rather than whole phrases, because a grounding source is ti
 
 Search grounding bills per request on top of tokens, unlike the other script knobs.
 
+## Submitting to Apple Podcasts and Spotify
+
+`/admin/feed` checks the feed against what the directories actually enforce and links out to both submission forms. Worth reading before submitting: each validates once and tells you very little about what failed.
+
+What the feed carries beyond plain RSS 2.0: `itunes:type`, per-item `itunes:explicit` and `itunes:episodeType`, `copyright`, `lastBuildDate`, artwork at channel and item level, and a nested `itunes:category`/subcategory. All configurable under `[feed]`.
+
+Two things that are easy to get wrong and produce an unhelpful rejection:
+
+- **Artwork must be square, 1400×1400 to 3000×3000.** This is the most common rejection. `static/cover.png` ships at 1400×1400.
+- **`itunes:category` must be spelled exactly as in Apple's list.** The readiness check holds the list and rejects anything else.
+
+The enclosure URL answers `HEAD` as well as `GET`. Both directories probe it before accepting a feed, and FastAPI's `@app.get` alone returns 405 — which reads to them as a broken media URL rather than a missing method.
+
+A missing duration omits `itunes:duration` rather than emitting the `--:--` the web UI uses for "unknown", which is not a duration and fails validation.
+
+Publishing an episode adds it to the feed and unpublishing removes it; directories honour that on their next poll. A client that already downloaded an episode keeps its copy.
+
 ## Listening on a phone
 
 The feed at `/feed.xml` is a valid RSS 2.0 feed with the iTunes namespace and absolute enclosure URLs. There is no authentication — the tailnet is the security boundary, so do not expose this to the public internet.

@@ -398,3 +398,13 @@ a.tag:hover { border-color: var(--a); color: var(--a); }
 .sorts { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; margin: 0; }
 .sortlabel { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
 .cites { font-variant-numeric: tabular-nums; }
+
+/* feed readiness */
+.checks { list-style: none; padding: 0; margin: 1.5rem 0; display: grid; gap: 0.55rem; }
+.checks li { display: flex; gap: 0.6rem; align-items: baseline; font-size: 0.92rem; line-height: 1.5; }
+.checks .mark { flex: none; width: 1rem; font-weight: 700; }
+.checks li.ok .mark { color: #1a7f45; }
+.checks li.bad { color: var(--err); }
+.checks li.warn .mark { color: var(--flag); }
+.submit { line-height: 1.7; padding-left: 1.2rem; }
+.submit li { margin-bottom: 0.5rem; }

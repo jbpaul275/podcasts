@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Feed readiness — {{ feed_title }}{% endblock %}
+{% block content %}
+
+<h1>Submitting to podcast directories</h1>
+<p class="muted">Your feed is at <a href="/feed.xml"><code>{{ feed_url }}</code></a>.
+  Apple and Spotify each validate it once, then tell you very little about what
+  failed — so these are the things worth getting right first.</p>
+
+<ul class="checks">
+  {% for c in checks %}
+    <li class="{{ 'ok' if c.ok else ('warn' if c.ok is none else 'bad') }}">
+      <span class="mark">{{ '✓' if c.ok else ('!' if c.ok is none else '✗') }}</span>
+      {{ c.text }}
+    </li>
+  {% endfor %}
+</ul>
+
+{% if blockers %}
+  <p class="error">{{ blockers|length }} thing{{ '' if blockers|length == 1 else 's' }}
+    would stop submission. Fix those first.</p>
+{% else %}
+  <h2>How to submit</h2>
+  <ol class="submit">
+    <li><strong>Apple</strong> — <a href="https://podcastsconnect.apple.com" rel="noopener" target="_blank">podcastsconnect.apple.com</a>,
+      sign in, <em>Add Show</em> → paste the feed URL. Apple emails the owner
+      address above to verify you own it. Review usually takes a few days.</li>
+    <li><strong>Spotify</strong> — <a href="https://podcasters.spotify.com" rel="noopener" target="_blank">podcasters.spotify.com</a>,
+      <em>Add your podcast</em> → paste the same URL. Usually live within hours.</li>
+    <li>Both keep polling the feed afterwards, so new episodes appear on their
+      own. Nothing to do per episode.</li>
+  </ol>
+  <p class="muted">Publishing an episode adds it to the feed; unpublishing
+    removes it. Directories honour removals on their next poll, but a client
+    that already downloaded an episode keeps its copy.</p>
+{% endif %}
+
+<p class="muted backlink"><a href="/admin">← Back to the library</a></p>
+
+{% endblock %}
