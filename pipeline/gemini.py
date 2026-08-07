@@ -143,6 +143,69 @@ def quota_is_unavailable(exc) -> bool:
     return bool(re.search(r"limit:\s*0\b", blob + " " + str(exc)))
 
 
+def quota_violation(exc) -> dict | None:
+    """Which quota a 429 actually hit, from its QuotaFailure detail.
+
+    The prose in a 429 is the same sentence every time -- "You exceeded your
+    current quota, please check your plan and billing details" -- and it is
+    followed by two long documentation URLs. None of that distinguishes a
+    per-minute limit you should wait out from a per-day one that will not move
+    until tomorrow, or from a free-tier cap that means the key's Cloud project
+    has no billing account. The structured detail does, and it is what gets
+    truncated away when the message is stored.
+    """
+    if getattr(exc, "code", None) != 429:
+        return None
+    for detail in _payload(exc).get("details") or []:
+        if not isinstance(detail, dict):
+            continue
+        if not str(detail.get("@type", "")).endswith("QuotaFailure"):
+            continue
+        for v in detail.get("violations") or []:
+            if not isinstance(v, dict) or not (v.get("quotaId") or v.get("quotaMetric")):
+                continue
+            dims = v.get("quotaDimensions") if isinstance(v.get("quotaDimensions"), dict) else {}
+            return {
+                "id": str(v.get("quotaId") or ""),
+                "metric": str(v.get("quotaMetric") or ""),
+                "value": str(v.get("quotaValue") or ""),
+                "model": str(dims.get("model") or ""),
+            }
+    return None
+
+
+def quota_is_daily(v: dict | None) -> bool:
+    """Google's quota ids spell the window out -- GenerateRequestsPerDayPer...
+    versus ...PerMinute... -- so the distinction is readable rather than
+    guessed at."""
+    return bool(v) and "perday" in v["id"].casefold()
+
+
+def quota_is_free_tier(v: dict | None) -> bool:
+    return bool(v) and "freetier" in (v["id"] + v["metric"]).casefold()
+
+
+def quota_summary(v: dict) -> str:
+    """One line naming the limit, for a page rather than a log."""
+    window = "per day" if quota_is_daily(v) else "per minute" if "perminute" in v["id"].casefold() else ""
+    limit = f"limit {v['value']}" if v["value"] else "limit unknown"
+    bits = [b for b in [v["id"] or v["metric"], limit, window] if b]
+    return ", ".join(bits)
+
+
+def describe(exc) -> str:
+    """A short reason fit to store on an episode.
+
+    Raw 429 text is ~400 characters of boilerplate and URLs, so it gets cut off
+    exactly where the useful part lives. This keeps the part that says what to
+    do about it.
+    """
+    v = quota_violation(exc)
+    if v:
+        return f"{type(exc).__name__}: 429 quota exhausted — {quota_summary(v)}"
+    return f"{type(exc).__name__}: {exc}"
+
+
 def model_is_gone(exc) -> bool:
     """A 404 for the model itself: retired, renamed, or never existed.
 
@@ -238,6 +301,22 @@ def call_with_retry(fn, cfg: dict, model: str, label: str = "request",
                     f"{model} has no quota on this API key's plan (limit: 0). "
                     "Retrying cannot help — enable billing on the project, or "
                     "point [models] in config.toml at a model you have access to."
+                ) from e
+            violation = quota_violation(e)
+            if quota_is_daily(violation):
+                # A daily allowance resets on Google's clock, not on ours.
+                # Backing off through it burns half an hour per episode to
+                # arrive at the same 429, and the retry window the server
+                # names is about the minute, not the day.
+                raise QuotaUnavailable(
+                    f"{model}: the daily quota is used up ({quota_summary(violation)}). "
+                    "It resets on Google's schedule, so retrying today cannot help. "
+                    + ("That quota is a free-tier one, which means this API key's "
+                       "Cloud project has no billing account attached — a paid "
+                       "project would not cap a day this low. "
+                       if quota_is_free_tier(violation) else "")
+                    + "Chunks already synthesized are kept, so a retry once it "
+                      "resets only pays for what is missing."
                 ) from e
             if not is_retryable(e):
                 raise
