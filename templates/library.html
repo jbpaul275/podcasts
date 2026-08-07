@@ -33,7 +33,7 @@
     <p class="postmeta">
       {% if ep.year %}<span>{{ ep.year }}</span>{% endif %}
       {% if ep.has_audio %}<span>{{ ep.duration }}</span>{% endif %}
-      {% if ep.status != 'done' %}<span class="status status-{{ ep.status }}">{{ ep.status }}</span>{% endif %}
+      {% if ep.status != 'done' %}<span class="status status-{{ ep.status }}">{{ ep.status_label or ep.status }}</span>{% endif %}
       {% if admin %}<span class="status status-{{ 'done' if ep.published else 'queued' }}">{{ 'public' if ep.published else 'private' }}</span>{% endif %}
       {% if admin and ep.flag_count %}<a class="flagcount" href="/episode/{{ ep.id }}#flags">{{ ep.flag_count }} flag{{ '' if ep.flag_count == 1 else 's' }}</a>{% endif %}
     </p>
@@ -91,7 +91,7 @@
         {% for ep in queue %}
           <li>
             <a href="/episode/{{ ep.id }}">{{ ep.title }}</a>
-            <span class="status status-{{ ep.status }}">{{ ep.status }}</span>
+            <span class="status status-{{ ep.status }}">{{ ep.status_label or ep.status }}</span>
             {% if ep.progress %}
               <span class="qprogress{% if ep.progress.stalled %} bad{% endif %}">
                 {{ ep.progress.note }}
