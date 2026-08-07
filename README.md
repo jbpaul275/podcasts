@@ -49,6 +49,14 @@ No text anywhere reads as a scan and says to OCR it. A little text but not enoug
 
 So re-uploading a paper that was turned away at ingest re-runs validation. If it now passes, the existing episode is accepted and queued rather than reported as a duplicate; if it still fails, its stored reason is rewritten to state today's limit. Only episodes that never entered the pipeline qualify — an empty stage log is exactly what an ingest-time rejection looks like, and quietly restarting a scripting or TTS failure would re-spend real money.
 
+A re-accepted episode is **re-dated**. The row is reused, and `created_at` is both what the library sorts on and what the feed sends as `pubDate` — so without this a paper you just re-uploaded would appear wherever it sat when it first bounced, days down a newest-first list. Re-uploading is a new submission and needs to surface like one.
+
+### Where failures go
+
+A failed episode leaves the main list for a collapsed box at the bottom of the admin page. That is right for a failure from last week and wrong for one from ten minutes ago: the episode you were watching disappears from where you were watching it, with a shut disclosure element the only trace.
+
+So `failed_at` is stamped whenever an episode fails — `db.mark_failed()` is the single path, rather than three call sites each remembering — and a failure inside the last six hours opens the box and says "one just now". Older ones settle back down.
+
 ### Is it stuck, or just slow?
 
 A running episode shows what it is doing (`synthesizing chunk 3 of 12`) and how long it has been doing it, on both the episode page and the admin queue. TTS is the long stage: chunks land every minute or two, so the timestamp is the signal, not the stage name. Past 15 minutes with no movement the line turns red and reads *stalled* — retry the stage from the episode page, which keeps every chunk already on disk and re-synthesizes only what is missing.

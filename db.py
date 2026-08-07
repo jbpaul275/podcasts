@@ -103,6 +103,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
                        ("rewrite_json", "TEXT"),
                        ("progress_at", "TEXT"),
                        ("episode_number", "INTEGER"),
+                       ("failed_at", "TEXT"),
                        ("flags_reviewed", "INTEGER DEFAULT 0")):
         if name not in cols:
             conn.execute(f"ALTER TABLE episode ADD COLUMN {name} {decl}")
@@ -112,12 +113,13 @@ def _migrate(conn: sqlite3.Connection) -> None:
 # ---- episode ----
 
 def create_episode(id: str, source_path: str, sha256: str | None,
-                   status: str = "queued", error: str | None = None) -> None:
+                   status: str = "queued", error: str | None = None,
+                   failed_at: str | None = None) -> None:
     conn = get_conn()
     conn.execute(
-        "INSERT INTO episode (id, created_at, source_path, sha256, status, error)"
-        " VALUES (?, ?, ?, ?, ?, ?)",
-        (id, now_iso(), source_path, sha256, status, error),
+        "INSERT INTO episode (id, created_at, source_path, sha256, status, error,"
+        " failed_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (id, now_iso(), source_path, sha256, status, error, failed_at),
     )
     conn.commit()
 
@@ -210,6 +212,14 @@ def find_by_sha(sha256: str) -> sqlite3.Row | None:
     return get_conn().execute(
         "SELECT * FROM episode WHERE sha256 = ?", (sha256,)
     ).fetchone()
+
+
+def mark_failed(id: str, error: str) -> None:
+    """Fail an episode and record when. The timestamp is what lets the library
+    tell a failure that happened just now from one from last week: a failed
+    episode leaves the main list for a collapsed box, so a fresh one needs to
+    announce itself or it reads as having vanished."""
+    update_episode(id, status="failed", error=error, failed_at=now_iso())
 
 
 def update_episode(id: str, **fields) -> None:

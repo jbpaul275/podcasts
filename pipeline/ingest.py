@@ -57,6 +57,7 @@ def ingest_pdf(path: str | Path, cfg: dict) -> str:
         sha256=sha,
         status="failed" if error else "queued",
         error=error,
+        failed_at=db.now_iso() if error else None,
     )
     if error:
         raise PipelineError(error)
@@ -100,7 +101,13 @@ def _recheck_rejected(existing, cfg: dict) -> str | None:
 
     log.info("re-accepting episode %s: it passes validation under the current "
              "limits", existing["id"])
-    db.update_episode(existing["id"], status="queued", error=None)
+    # Re-dated, because re-uploading is a new submission. The row is reused, so
+    # without this the episode keeps the timestamp from when it first bounced --
+    # and created_at is what the library sorts on and what the feed sends as
+    # pubDate. A paper you just added would appear wherever it sat days ago
+    # instead of at the top, which reads exactly like it never arrived.
+    db.update_episode(existing["id"], status="queued", error=None,
+                      created_at=db.now_iso())
     return existing["id"]
 
 

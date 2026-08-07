@@ -349,6 +349,36 @@ def _audio_is_stale(row) -> bool:
     return written > built
 
 
+# How long a failure counts as news. Long enough to survive making a coffee
+# while an episode processes, short enough that old failures settle back down.
+FRESH_FAILURE_S = 6 * 60 * 60
+
+
+def _failed_recently(rows: list[dict]) -> bool:
+    """Whether any of these failed within the last few hours.
+
+    A failed episode leaves the main list for a collapsed box at the bottom of
+    the page, which is right for a failure from last week and wrong for one
+    from ten minutes ago -- the episode you were watching simply disappears,
+    with a shut disclosure element the only trace. So a recent failure opens
+    the box.
+    """
+    now = datetime.now(timezone.utc)
+    for row in rows:
+        stamp = row.get("failed_at")
+        if not stamp:
+            continue
+        try:
+            when = datetime.fromisoformat(stamp)
+        except ValueError:
+            continue
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+        if (now - when).total_seconds() < FRESH_FAILURE_S:
+            return True
+    return False
+
+
 def _intro_view(row) -> dict | None:
     """The spoken AI disclosure: what it will say, and whether the audio on
     disk still says it. Editing a paper's title or authors changes the wording,
@@ -548,6 +578,7 @@ def _episode_view(row) -> dict:
         "audio_is_stale": _audio_is_stale(row),
         "error": row["error"],
         "created_at": row["created_at"],
+        "failed_at": row["failed_at"],
         "duration_s": row["duration_s"],
         "duration": _fmt_duration(row["duration_s"]),
         "cost_usd": row["cost_usd"] or 0.0,
@@ -1173,6 +1204,7 @@ def _render_library(request: Request, admin_mode: bool, error: str = "",
         {
             "episodes": episodes,
             "failed": failed,
+            "failed_recently": _failed_recently(failed),
             "admin": admin_mode,
             "signed_in": auth.is_admin(request),
             "tts_choices": tts_choices(),

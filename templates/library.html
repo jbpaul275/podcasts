@@ -100,8 +100,8 @@
 {% endif %}
 
 {% if admin and failed %}
-  <details class="failures">
-    <summary>{{ failed|length }} failed</summary>
+  <details class="failures"{{ ' open' if failed_recently }}>
+    <summary>{{ failed|length }} failed{% if failed_recently %} — one just now{% endif %}</summary>
     <ul>
       {% for ep in failed %}
         <li>
