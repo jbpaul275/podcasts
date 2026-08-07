@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Prompts — {{ feed_title }}{% endblock %}
+{% block content %}
+
+<h1>Prompts</h1>
+<p class="muted">These are the instructions sent to the model. They are read at
+  call time, so a save takes effect on the next episode — no redeploy, no
+  restart. Edits are stored on the data volume; the shipped default stays
+  available and every prompt can be reverted to it.</p>
+<p class="muted">Changing these changes what every future episode sounds like.
+  Existing episodes are untouched until you rewrite their scripts.</p>
+
+{% if saved %}<p class="flash ok">Saved <code>{{ saved }}</code>.</p>{% endif %}
+{% if reset %}<p class="flash ok">Reverted <code>{{ reset }}</code> to the shipped default.</p>{% endif %}
+
+{% for p in prompts %}
+  <details class="promptbox" id="{{ p.name }}"{% if p.edited %} open{% endif %}>
+    <summary>
+      <span class="promptname">
+        <code>{{ p.name }}</code>
+        {% if p.edited %}<span class="status status-queued">edited</span>{% endif %}
+        {% if p.used_by %}<span class="usedby">{{ p.used_by }}</span>{% endif %}
+      </span>
+    </summary>
+
+    {% if p.warnings %}
+      <div class="promptwarn">
+        <strong>This edit drops something the pipeline relies on:</strong>
+        <ul>{% for w in p.warnings %}<li>{{ w }}</li>{% endfor %}</ul>
+        <p>Saved anyway — it is your prompt. Revert below if that was not deliberate.</p>
+      </div>
+    {% endif %}
+
+    <form action="/admin/prompts/{{ p.name }}" method="post">
+      <textarea name="body" rows="18" spellcheck="false">{{ p.body }}</textarea>
+      <div class="rwactions">
+        <button type="submit" name="action" value="save">Save</button>
+        {% if p.edited %}
+          <button type="submit" name="action" value="reset" class="secondary">Revert to default</button>
+        {% endif %}
+      </div>
+    </form>
+
+    {% if p.edited %}
+      <details class="promptdefault">
+        <summary>Show the shipped default</summary>
+        <pre>{{ p.default }}</pre>
+      </details>
+    {% endif %}
+  </details>
+{% endfor %}
+
+<p class="muted backlink"><a href="/admin">← Back to the library</a></p>
+
+{% endblock %}

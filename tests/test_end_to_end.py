@@ -1927,6 +1927,110 @@ def test_progress_reaches_the_admin_pages(client, env):
         assert "stalled" in body, url
 
 
+# ------------------------------------------------------------ prompt editing
+
+@pytest.fixture
+def prompt_env(tmp_path, monkeypatch):
+    """Point prompt overrides at a temp dir so tests never touch the repo."""
+    import config
+    import app as app_mod
+
+    override = tmp_path / "promptoverrides"
+    monkeypatch.setattr(config, "PROMPT_OVERRIDE_DIR", override)
+    yield override
+
+
+def test_prompts_page_lists_every_shipped_prompt(client, prompt_env):
+    import config
+
+    body = client.get("/admin/prompts").text
+    for name in config.prompt_names():
+        assert name in body
+
+
+def test_saving_a_prompt_changes_what_the_pipeline_loads(client, prompt_env):
+    """The whole point: no redeploy, no restart."""
+    import config
+
+    original = config.load_prompt("episode_title.md")
+    resp = client.post("/admin/prompts/episode_title.md", follow_redirects=False,
+                       data={"action": "save", "body": "Name it after a colour."})
+    assert resp.status_code == 303
+    assert config.load_prompt("episode_title.md") == "Name it after a colour."
+    assert config.load_prompt("episode_title.md") != original
+    # The shipped default stays readable, which is what makes revert possible.
+    assert config.prompt_default("episode_title.md") == original
+
+
+def test_reverting_restores_the_shipped_default(client, prompt_env):
+    import config
+
+    original = config.prompt_default("episode_title.md")
+    client.post("/admin/prompts/episode_title.md",
+                data={"action": "save", "body": "Something else."})
+    assert config.load_prompt("episode_title.md") == "Something else."
+
+    client.post("/admin/prompts/episode_title.md", data={"action": "reset"})
+    assert config.load_prompt("episode_title.md") == original
+    assert config.prompt_override("episode_title.md") is None
+
+
+def test_saving_the_default_verbatim_is_a_reset(client, prompt_env):
+    """Otherwise this copy freezes, silently diverging from future upstream edits."""
+    import config
+
+    default = config.prompt_default("episode_title.md")
+    client.post("/admin/prompts/episode_title.md",
+                data={"action": "save", "body": default})
+    assert config.prompt_override("episode_title.md") is None
+
+
+def test_a_prompt_name_off_the_allowlist_is_refused(client, prompt_env):
+    """`name` comes from the URL and reaches a filesystem path."""
+    for bad in ("../config.toml", "..%2Fconfig.toml", "nope.md"):
+        resp = client.post(f"/admin/prompts/{bad}",
+                           data={"action": "save", "body": "x"})
+        assert resp.status_code in (404, 307), bad
+    assert not (Path(__file__).resolve().parents[1] / "config.toml").read_text().startswith("x")
+
+
+def test_editing_prompts_requires_admin(public_client, prompt_env):
+    assert public_client.get("/admin/prompts", follow_redirects=False
+                             ).headers["location"] == "/admin/login"
+    assert public_client.post("/admin/prompts/episode_title.md",
+                              data={"action": "save", "body": "x"},
+                              follow_redirects=False).status_code in (303, 401, 403)
+    import config
+    assert config.prompt_override("episode_title.md") is None, "not saved by an anon"
+
+
+def test_an_edit_that_drops_a_placeholder_warns(client, prompt_env):
+    """A missing $TARGET_WORDS is invisible in the output — the length budget
+    just silently stops being sent."""
+    import config
+
+    client.post("/admin/prompts/script_user.md",
+                data={"action": "save", "body": "Write the podcast script."})
+    warnings = config.prompt_warnings("script_user.md", "Write the podcast script.")
+    assert any("$TARGET_WORDS" in w for w in warnings)
+
+    body = client.get("/admin/prompts").text
+    assert "$TARGET_WORDS" in body and "drops something the pipeline relies on" in body
+
+
+def test_dropping_the_no_fabrication_rule_warns(client, prompt_env):
+    import config
+
+    warnings = config.prompt_warnings("script_system.md", "HOST_A: talk nicely.")
+    assert any("fabricat" in w for w in warnings), warnings
+    assert not any("HOST_A" in w for w in warnings), "HOST_A is present"
+
+
+def test_an_unedited_prompt_shows_no_warnings(client, prompt_env):
+    import config
+
+    for name in config.prompt_names():
+        assert config.prompt_warnings(name, config.prompt_default(name)) == [], name
 def test_stage_log_is_collapsed_on_a_healthy_episode(client, env, tmp_path):
     """It is diagnostics; a working episode should not lead with it."""
     import db
