@@ -2711,3 +2711,110 @@ def test_api_clients_still_get_json(client, env):
     resp = client.delete("/episode/DOESNOTEXIST", headers={"accept": "application/json"})
     assert resp.status_code == 404
     assert resp.json()["detail"] == "no such episode"
+
+
+# ------------------------------------------------- podcast directory readiness
+
+def _live_episode(env, tmp_path, name="feed.pdf", duration=612.4):
+    import db
+    from pipeline import ingest
+
+    pdf = tmp_path / name
+    _make_pdf(pdf)
+    eid = ingest.ingest_pdf(pdf, env["cfg"])
+    mp3 = env["final"] / f"{eid}.mp3"
+    mp3.write_bytes(b"\xff\xfb" + b"\0" * 5000)
+    db.update_episode(eid, status="done", published=1, flags_reviewed=1,
+                      title=name, audio_path=str(mp3), duration_s=duration,
+                      authors=json.dumps(["A Person"]), summary="A blurb.")
+    return eid
+
+
+def test_the_enclosure_answers_head(client, env, tmp_path):
+    """Apple and Spotify probe the media URL before accepting a feed.
+    FastAPI's @app.get does not answer HEAD, and a 405 reads as a broken URL."""
+    eid = _live_episode(env, tmp_path, "head.pdf")
+    resp = client.head(f"/episode/{eid}/audio")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "audio/mpeg"
+    assert int(resp.headers["content-length"]) == 5002
+    assert resp.headers["accept-ranges"] == "bytes"
+    assert resp.content == b"", "HEAD must carry no body"
+
+
+def test_a_missing_duration_omits_the_tag(client, env, tmp_path):
+    """"--:--" is what the web UI shows for unknown. It is not a duration."""
+    _live_episode(env, tmp_path, "nodur.pdf", duration=None)
+    xml = client.get("/feed.xml").text
+    assert "--:--" not in xml
+    assert "<itunes:duration>" not in xml
+
+
+def test_duration_is_emitted_as_whole_seconds(client, env, tmp_path):
+    _live_episode(env, tmp_path, "dur.pdf", duration=612.4)
+    assert "<itunes:duration>612</itunes:duration>" in client.get("/feed.xml").text
+
+
+def test_the_feed_carries_what_the_directories_require(client, env, tmp_path):
+    from xml.dom.minidom import parseString
+
+    _live_episode(env, tmp_path, "req.pdf")
+    xml = client.get("/feed.xml").text
+    parseString(xml)  # well-formed, or this raises
+
+    for tag in ("<language>", "<itunes:explicit>", "<itunes:type>",
+                "<itunes:image", "<itunes:category", "<itunes:owner>",
+                "<itunes:email>", "<atom:link", "<lastBuildDate>", "<copyright>"):
+        assert tag in xml, tag
+    # Item level.
+    for tag in ("<guid isPermaLink=\"false\">", "<pubDate>", "<enclosure ",
+                "<itunes:explicit>", "<itunes:episodeType>"):
+        assert tag in xml, tag
+    assert 'type="audio/mpeg"' in xml and 'length="5002"' in xml
+
+
+def test_feed_artwork_url_carries_no_query_string(client, env, tmp_path):
+    """Cache-busting is for browsers; a query string is a needless thing for a
+    directory validator to object to."""
+    import re as _re
+
+    _live_episode(env, tmp_path, "art.pdf")
+    xml = client.get("/feed.xml").text
+    for href in _re.findall(r'itunes:image href="([^"]+)"', xml):
+        assert "?" not in href, href
+
+
+def test_readiness_flags_the_things_that_get_shows_rejected(client, env, tmp_path,
+                                                            monkeypatch):
+    import app as app_mod
+
+    # Nothing published, http base url, unknown category.
+    monkeypatch.setitem(app_mod.CFG, "feed", {**env["cfg"].get("feed", {}),
+                                              "category": "Underwater Basketry"})
+    monkeypatch.setitem(app_mod.CFG, "site", {"contact_email": ""})
+    text = " ".join(c["text"] for c in app_mod.feed_readiness() if c["ok"] is False)
+    assert "No published episodes" in text
+    assert "https" in text
+    assert "contact_email" in text
+    assert "Underwater Basketry" in text
+
+    body = client.get("/admin/feed").text
+    assert "would stop submission" in body
+
+
+def test_readiness_passes_on_a_healthy_setup(client, env, tmp_path, monkeypatch):
+    import app as app_mod
+
+    _live_episode(env, tmp_path, "ready.pdf")
+    monkeypatch.setitem(app_mod.CFG, "server",
+                        {**env["cfg"]["server"], "base_url": "https://paperpod.org"})
+    monkeypatch.setitem(app_mod.CFG, "feed", {"category": "Science",
+                                              "subcategory": "Social Sciences"})
+    monkeypatch.setitem(app_mod.CFG, "site", {"contact_email": "a@b.com"})
+    assert [c for c in app_mod.feed_readiness() if c["ok"] is False] == []
+    assert "podcastsconnect.apple.com" in client.get("/admin/feed").text
+
+
+def test_the_feed_check_needs_admin(public_client):
+    assert public_client.get("/admin/feed", follow_redirects=False
+                             ).headers["location"] == "/admin/login"
