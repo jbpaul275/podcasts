@@ -45,6 +45,10 @@ The text-layer check samples the **first ten pages**, not the first one. Working
 
 No text anywhere reads as a scan and says to OCR it. A little text but not enough is a different problem and says so, because "run OCR" is the wrong advice for a document that is simply thin.
 
+**A rejection is a verdict under the limits in force at the time**, and it is stored as flat text on the episode. Raise `max_pages` and every paper refused under the old ceiling would otherwise keep quoting that ceiling forever — re-uploading matches on SHA and never reaches the validator again, so the message reads as a live decision by code that no longer exists.
+
+So re-uploading a paper that was turned away at ingest re-runs validation. If it now passes, the existing episode is accepted and queued rather than reported as a duplicate; if it still fails, its stored reason is rewritten to state today's limit. Only episodes that never entered the pipeline qualify — an empty stage log is exactly what an ingest-time rejection looks like, and quietly restarting a scripting or TTS failure would re-spend real money.
+
 ### Is it stuck, or just slow?
 
 A running episode shows what it is doing (`synthesizing chunk 3 of 12`) and how long it has been doing it, on both the episode page and the admin queue. TTS is the long stage: chunks land every minute or two, so the timestamp is the signal, not the stage name. Past 15 minutes with no movement the line turns red and reads *stalled* — retry the stage from the episode page, which keeps every chunk already on disk and re-synthesizes only what is missing.

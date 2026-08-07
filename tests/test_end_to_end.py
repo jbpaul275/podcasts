@@ -3262,3 +3262,85 @@ def test_an_episode_with_no_chunks_left_is_never_queued_silently(client, env, tm
 
     client.post("/admin/disclosure", follow_redirects=False)
     assert app_mod.WORK_Q.empty(), "the expensive one must not be queued"
+
+
+# ------------------------------------------- re-checking a rejected paper
+
+def test_a_paper_rejected_under_an_old_limit_is_accepted_after_it_is_raised(env, tmp_path):
+    """A rejection is a verdict under the limits at the time, but it is stored
+    as text on the episode. Without a re-check the message outlives the rule it
+    describes, and re-uploading returns it verbatim forever."""
+    import db
+    from pipeline import PipelineError, ingest
+
+    pdf = tmp_path / "long.pdf"
+    _make_pdf(pdf, pages=8)
+
+    strict = {**env["cfg"], "script": {**env["cfg"]["script"], "max_pages": 5}}
+    with pytest.raises(PipelineError, match="8 pages"):
+        ingest.ingest_pdf(pdf, strict)
+    rejected = db.list_episodes()[0]
+    assert rejected["status"] == "failed" and "the limit is 5" in rejected["error"]
+
+    # Same file, same SHA, roomier limit.
+    relaxed = {**env["cfg"], "script": {**env["cfg"]["script"], "max_pages": 50}}
+    episode_id = ingest.ingest_pdf(pdf, relaxed)
+
+    assert episode_id == rejected["id"], "the same paper, not a second copy"
+    row = db.get_episode(episode_id)
+    assert row["status"] == "queued"
+    assert row["error"] is None
+    assert len(db.list_episodes()) == 1
+
+
+def test_a_stale_rejection_message_is_refreshed_even_when_it_still_fails(env, tmp_path):
+    """Quoting a limit nobody can act on is worse than quoting today's."""
+    import db
+    from pipeline import DuplicateEpisode, PipelineError, ingest
+
+    pdf = tmp_path / "verylong.pdf"
+    _make_pdf(pdf, pages=8)
+
+    with pytest.raises(PipelineError):
+        ingest.ingest_pdf(pdf, {**env["cfg"],
+                                "script": {**env["cfg"]["script"], "max_pages": 2}})
+    eid = db.list_episodes()[0]["id"]
+    assert "the limit is 2" in db.get_episode(eid)["error"]
+
+    with pytest.raises(DuplicateEpisode):
+        ingest.ingest_pdf(pdf, {**env["cfg"],
+                                "script": {**env["cfg"]["script"], "max_pages": 6}})
+    assert "the limit is 6" in db.get_episode(eid)["error"], (
+        "the stored reason must state the limit in force now"
+    )
+
+
+def test_a_finished_episode_is_still_a_duplicate(env, tmp_path):
+    """The re-check must not turn every re-upload into a re-run."""
+    from pipeline import DuplicateEpisode, ingest
+
+    pdf = tmp_path / "fine.pdf"
+    _make_pdf(pdf)
+    episode_id = ingest.ingest_pdf(pdf, env["cfg"])
+
+    with pytest.raises(DuplicateEpisode) as caught:
+        ingest.ingest_pdf(pdf, env["cfg"])
+    assert caught.value.episode_id == episode_id
+
+
+def test_a_failure_inside_the_pipeline_is_not_silently_restarted(env, tmp_path):
+    """Scripting and TTS failures cost money to redo. Only a paper that never
+    got past the door is re-checked."""
+    import db
+    from pipeline import DuplicateEpisode, ingest
+
+    pdf = tmp_path / "midfail.pdf"
+    _make_pdf(pdf)
+    episode_id = ingest.ingest_pdf(pdf, env["cfg"])
+    db.stage_start(episode_id, "scripting")
+    db.stage_end(episode_id, "scripting", ok=False, detail="the model fell over")
+    db.update_episode(episode_id, status="failed", error="the model fell over")
+
+    with pytest.raises(DuplicateEpisode):
+        ingest.ingest_pdf(pdf, env["cfg"])
+    assert db.get_episode(episode_id)["status"] == "failed", "not requeued behind your back"
