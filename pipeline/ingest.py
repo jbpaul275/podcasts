@@ -17,6 +17,7 @@ import fitz  # pymupdf
 
 import db
 from config import PAPERS_DIR, categories, load_prompt
+from . import citations
 from . import DuplicateEpisode, PipelineError
 from .gemini import call_with_retry, client, pdf_part, record_cost, strip_fences
 
@@ -133,5 +134,33 @@ def extract_metadata(episode_id: str, cfg: dict) -> None:
         abstract=(meta.get("abstract") or "").strip() or None,
         summary=(meta.get("summary") or "").strip() or None,
         categories=json.dumps(clean_categories(meta.get("categories"), cfg)),
+        doi=citations.normalize_doi(meta.get("doi")),
         venue=(meta.get("venue_or_series") or "") or None,
     )
+    refresh_citations(episode_id, cfg)
+
+
+def refresh_citations(episode_id: str, cfg: dict) -> int | None:
+    """Look up the citation count and store it, or leave it alone.
+
+    Wrapped so a lookup can never fail an episode: an unreachable third party
+    is not a reason to lose a finished podcast. A count already entered by hand
+    is only overwritten by a real answer, never by a failed lookup.
+    """
+    if not (cfg.get("citations", {}) or {}).get("enabled", True):
+        return None
+    row = db.get_episode(episode_id)
+    if not row:
+        return None
+    try:
+        found = citations.lookup(row["doi"], row["title"], cfg)
+    except Exception:
+        log.exception("citation lookup crashed for %s", episode_id)
+        return None
+    if not found:
+        return None
+    count, source = found
+    db.update_episode(episode_id, cited_by=count, cited_by_source=source,
+                      cited_by_at=db.now_iso())
+    log.info("episode %s cited %d times per %s", episode_id, count, source)
+    return count

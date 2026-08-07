@@ -56,13 +56,27 @@ The previous script is kept for a one-step undo. An episode whose script is newe
 
 `[[categories]]` in `config.toml` is a fixed tag vocabulary — a slug (stored, and what appears in URLs) and a label (displayed). At library scale, free text costs more than it gives: `AI` / `ai` / `Machine Learning` become three tags for one idea and the filter stops meaning anything.
 
-**An episode can carry several.** That is deliberate. "Classic" and "AI" are different axes — a classic AI paper is genuinely both, and forcing one choice hides it from whichever filter someone actually looks under. Multi-tag dissolves the problem without modelling a taxonomy.
+**An episode can carry several.** A paper can be both History and Economics, and forcing one choice hides it from whichever filter someone actually looks under.
+
+There is deliberately **no "classic" tag**. Sorting by citations does that job better: it is measured rather than a judgement call, and it ranks rather than merely including.
 
 The metadata stage suggests tags from the vocabulary while it is already reading the PDF, so new papers arrive tagged. Anything it returns that is not a configured slug is dropped rather than stored — an unknown tag would show up in no filter and silently take the episode out of every list it belongs in. Correct them per-episode in the admin.
 
 The public page filters via `?category=<slug>`: real links, so each filter is shareable, bookmarkable, and works with the back button. Chips appear only for categories that have episodes, with counts taken from the same list being rendered.
 
 Renaming a label is free. Changing a slug orphans every episode already tagged with it.
+
+### Sorting, and citation counts
+
+The library sorts three ways — newest episodes (the default), the paper's own publication date, and most cited — composable with the category filter and carried in the URL alongside it.
+
+Citation counts come from [OpenAlex](https://openalex.org): free, no key, lookup by DOI where the paper printed one and by exact title match otherwise. A near-miss on the title is rejected, because attaching some other paper's count would then silently reorder the whole site.
+
+**The count is never asked of the language model.** It is not printed in the paper, so a model has nothing to read it off and would supply a plausible number instead — and here that number drives what the public sees first. The DOI *is* printed, so that much is extracted normally.
+
+Lookups fail silently and leave the count unset; nothing about a third-party outage can fail an episode, and a miss never overwrites a number entered by hand. Each episode has a **Look up again** button, since counts only go up. `[citations] enabled = false` turns the whole thing off.
+
+Unknown and zero sort differently: a paper with no count sorts *below* one with a genuine zero, because "not looked up" and "never cited" are different facts.
 
 ### Citation flags
 

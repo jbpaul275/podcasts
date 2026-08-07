@@ -500,6 +500,10 @@ def _episode_view(row) -> dict:
         "script_md_present": bool(row["script_md"]),
         "summary": _blurb(row),
         "categories": db.episode_categories(row),
+        "doi": row["doi"],
+        "cited_by": row["cited_by"],
+        "cited_by_at": row["cited_by_at"],
+        "cited_by_source": row["cited_by_source"],
         "category_labels": [category_labels(CFG).get(c, c)
                             for c in db.episode_categories(row)],
         "authors": authors,
@@ -627,6 +631,10 @@ DONE_MESSAGES = {
     "rewriting": ("Rewriting the script. This page refreshes itself; the new "
                   "script appears below when it lands.", "scriptmodel"),
     "retrying": ("Re-running. This page refreshes itself while it works.", None),
+    "cited": ("Citation count updated.", "citations"),
+    "nocite": ("No citation count found. OpenAlex has no record matching this "
+               "paper's DOI or title — type the number in by hand below.",
+               "citations"),
 }
 
 
@@ -678,11 +686,11 @@ def logout():
 
 
 @app.get("/admin", response_class=HTMLResponse)
-def admin(request: Request, error: str = "", category: str = ""):
+def admin(request: Request, error: str = "", category: str = "", sort: str = ""):
     if not auth.is_admin(request):
         return RedirectResponse("/admin/login", status_code=303)
     return _render_library(request, admin_mode=True, error=error,
-                           category=category)
+                           category=category, sort=sort)
 
 
 @app.post("/episode/{episode_id}/edit")
@@ -722,6 +730,17 @@ async def edit_episode(request: Request, episode_id: str):
         chosen = set(form.getlist("categories"))
         fields["categories"] = json.dumps(
             [c["slug"] for c in categories(CFG) if c["slug"] in chosen])
+    if "doi" in form:
+        fields["doi"] = ingest.citations.normalize_doi(sent("doi"))
+    if "cited_by" in form:
+        raw = (sent("cited_by") or "").replace(",", "")
+        try:
+            fields["cited_by"] = max(0, int(raw)) if raw else None
+        except ValueError:
+            fields["cited_by"] = None
+        if fields["cited_by"] is not None:
+            fields["cited_by_source"] = "entered by hand"
+            fields["cited_by_at"] = db.now_iso()
     if "source_url" in form:
         fields["source_url"] = safe_url(str(form["source_url"]))
     if "year" in form:
@@ -941,6 +960,19 @@ async def rewrite_script(request: Request, episode_id: str):
     return _done(episode_id, "rewriting")
 
 
+@app.post("/episode/{episode_id}/citations")
+def refresh_citations_route(request: Request, episode_id: str):
+    """Look the count up again. Counts go up over time, and a paper that had no
+    OpenAlex record when it was ingested may have one now."""
+    require_admin(request)
+    if not db.get_episode(episode_id):
+        raise HTTPException(404, "no such episode")
+    found = ingest.refresh_citations(episode_id, CFG)
+    return RedirectResponse(
+        f"/episode/{episode_id}?done={'cited' if found is not None else 'nocite'}"
+        "#citations", status_code=303)
+
+
 @app.post("/episode/{episode_id}/script/revert")
 def revert_script(request: Request, episode_id: str):
     """Undo the last rewrite. One step back is enough to escape a bad edit."""
@@ -970,8 +1002,27 @@ def terms(request: Request):
 
 
 @app.get("/", response_class=HTMLResponse)
-def library(request: Request, category: str = ""):
-    return _render_library(request, admin_mode=False, category=category)
+def library(request: Request, category: str = "", sort: str = ""):
+    return _render_library(request, admin_mode=False, category=category, sort=sort)
+
+
+# key -> (label, sort key, reverse). Order is the order the control offers them.
+SORTS: dict[str, tuple] = {
+    "created": ("Newest episodes", lambda e: (e["created_at"] or "", e["id"]), True),
+    "published": ("Paper date", lambda e: (e["year"] or 0, e["created_at"] or ""), True),
+    "cited": ("Most cited", lambda e: (e["cited_by"] if e["cited_by"] is not None else -1,
+                                       e["year"] or 0), True),
+}
+DEFAULT_SORT = "created"
+
+
+def _sorted_episodes(episodes: list[dict], sort: str) -> list[dict]:
+    """Sorting is stable on a secondary key, so equal values keep a sensible
+    order instead of shuffling between requests. Papers with no citation count
+    sort last under "most cited" rather than mixing in among the zeroes:
+    unknown and zero are different facts."""
+    _, key, rev = SORTS.get(sort, SORTS[DEFAULT_SORT])
+    return sorted(episodes, key=key, reverse=rev)
 
 
 def _category_chips(episodes: list[dict], selected: str) -> list[dict]:
@@ -996,7 +1047,7 @@ def _category_chips(episodes: list[dict], selected: str) -> list[dict]:
 
 
 def _render_library(request: Request, admin_mode: bool, error: str = "",
-                    category: str = ""):
+                    category: str = "", sort: str = ""):
     all_episodes = [
         _episode_view(r) for r in db.list_episodes(published_only=not admin_mode)
     ]
@@ -1011,6 +1062,8 @@ def _render_library(request: Request, admin_mode: bool, error: str = "",
     chips = _category_chips(episodes, category)
     if category:
         episodes = [e for e in episodes if category in e["categories"]]
+    sort = sort if sort in SORTS else DEFAULT_SORT
+    episodes = _sorted_episodes(episodes, sort)
     return templates.TemplateResponse(
         request,
         "library.html",
@@ -1026,6 +1079,8 @@ def _render_library(request: Request, admin_mode: bool, error: str = "",
             "chips": chips,
             "category": category,
             "category_label": category_labels(CFG).get(category, ""),
+            "sort": sort,
+            "sorts": [{"key": k, "label": v[0]} for k, v in SORTS.items()],
             "error": error,
             "total_cost": sum(e["cost_usd"] for e in all_episodes),
             "feed_url": CFG["server"]["base_url"].rstrip("/") + "/feed.xml",

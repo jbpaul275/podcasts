@@ -394,3 +394,7 @@ ul.plain { list-style: none; padding: 0; margin: 0 0 0.5rem; }
 .catopt input { width: auto; margin: 0; }
 a.tag { text-decoration: none; }
 a.tag:hover { border-color: var(--a); color: var(--a); }
+.browsebar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem 1.25rem; margin-bottom: 0.5rem; }
+.sorts { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; margin: 0; }
+.sortlabel { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+.cites { font-variant-numeric: tabular-nums; }

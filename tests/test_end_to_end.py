@@ -2536,3 +2536,106 @@ def test_the_metadata_prompt_offers_only_configured_slugs(env):
     prompt = _metadata_prompt(env["cfg"])
     assert '"ai" — AI' in prompt
     assert "$CATEGORIES" not in prompt, "the placeholder must be substituted"
+
+
+# ------------------------------------------------------------------- sorting
+
+def _paper(env, tmp_path, name, *, year, cited, created):
+    import db
+    from pipeline import ingest
+
+    pdf = tmp_path / name
+    _make_pdf(pdf)
+    eid = ingest.ingest_pdf(pdf, env["cfg"])
+    db.update_episode(eid, status="done", published=1, flags_reviewed=1,
+                      title=name, year=year, cited_by=cited, created_at=created)
+    return eid
+
+
+def _order(body, names):
+    return sorted(names, key=lambda n: body.index(n) if n in body else 10**9)
+
+
+def test_the_three_sorts_each_order_differently(client, env, tmp_path):
+    _paper(env, tmp_path, "old-famous.pdf", year=1948, cited=90000,
+           created="2026-01-01T00:00:00+00:00")
+    _paper(env, tmp_path, "new-quiet.pdf", year=2025, cited=3,
+           created="2026-08-01T00:00:00+00:00")
+    _paper(env, tmp_path, "mid.pdf", year=1994, cited=500,
+           created="2026-04-01T00:00:00+00:00")
+    names = ["old-famous.pdf", "new-quiet.pdf", "mid.pdf"]
+
+    assert _order(client.get("/?sort=created").text, names) == [
+        "new-quiet.pdf", "mid.pdf", "old-famous.pdf"]
+    assert _order(client.get("/?sort=published").text, names) == [
+        "new-quiet.pdf", "mid.pdf", "old-famous.pdf"]
+    assert _order(client.get("/?sort=cited").text, names) == [
+        "old-famous.pdf", "mid.pdf", "new-quiet.pdf"]
+
+
+def test_newest_first_is_the_default(client, env, tmp_path):
+    _paper(env, tmp_path, "first.pdf", year=2000, cited=1,
+           created="2026-01-01T00:00:00+00:00")
+    _paper(env, tmp_path, "second.pdf", year=1900, cited=999,
+           created="2026-08-01T00:00:00+00:00")
+    names = ["first.pdf", "second.pdf"]
+    assert _order(client.get("/").text, names) == ["second.pdf", "first.pdf"]
+    assert _order(client.get("/?sort=nonsense").text, names) == ["second.pdf", "first.pdf"]
+
+
+def test_an_unknown_citation_count_sorts_below_a_real_zero(client, env, tmp_path):
+    """Unknown and zero are different facts; lumping them together would bury a
+    paper that simply has not been looked up yet."""
+    _paper(env, tmp_path, "zero.pdf", year=2020, cited=0,
+           created="2026-01-01T00:00:00+00:00")
+    _paper(env, tmp_path, "unknown.pdf", year=2020, cited=None,
+           created="2026-02-01T00:00:00+00:00")
+    names = ["zero.pdf", "unknown.pdf"]
+    assert _order(client.get("/?sort=cited").text, names) == ["zero.pdf", "unknown.pdf"]
+
+
+def test_sort_and_category_compose(client, env, tmp_path):
+    import db
+
+    a = _paper(env, tmp_path, "ai-big.pdf", year=2017, cited=9000,
+               created="2026-01-01T00:00:00+00:00")
+    b = _paper(env, tmp_path, "ai-small.pdf", year=2020, cited=5,
+               created="2026-02-01T00:00:00+00:00")
+    c = _paper(env, tmp_path, "econ.pdf", year=1994, cited=99999,
+               created="2026-03-01T00:00:00+00:00")
+    db.update_episode(a, categories=json.dumps(["ai"]))
+    db.update_episode(b, categories=json.dumps(["ai"]))
+    db.update_episode(c, categories=json.dumps(["economics"]))
+
+    body = client.get("/?sort=cited&category=ai").text
+    assert "econ.pdf" not in body, "the category filter still applies"
+    assert _order(body, ["ai-big.pdf", "ai-small.pdf"]) == ["ai-big.pdf", "ai-small.pdf"]
+    # The chips keep you in the sort you chose.
+    assert "sort=cited" in body
+
+
+def test_citation_counts_are_shown(client, env, tmp_path):
+    _paper(env, tmp_path, "cited.pdf", year=2017, cited=90210,
+           created="2026-01-01T00:00:00+00:00")
+    assert "90,210 citations" in client.get("/").text
+
+
+def test_a_hand_entered_count_is_marked_as_such(client, env, tmp_path):
+    import db
+
+    eid = _paper(env, tmp_path, "manual.pdf", year=2017, cited=None,
+                 created="2026-01-01T00:00:00+00:00")
+    client.post(f"/episode/{eid}/edit", data={"cited_by": "1,234"})
+    row = db.get_episode(eid)
+    assert row["cited_by"] == 1234, "commas in a pasted number are fine"
+    assert row["cited_by_source"] == "entered by hand"
+
+    client.post(f"/episode/{eid}/edit", data={"cited_by": ""})
+    assert db.get_episode(eid)["cited_by"] is None, "clearing means not known"
+
+
+def test_there_is_no_classic_category_any_more():
+    """Citations rank; a tag only includes. Sorting does the job better."""
+    from config import categories, load_config
+
+    assert "classic" not in {c["slug"] for c in categories(load_config())}

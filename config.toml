@@ -50,9 +50,13 @@ models = [
 # free text: at this size typos and near-duplicates ("AI" / "ai" / "Machine
 # Learning") cost more than the flexibility is worth.
 #
-# An episode can carry several. That is what lets "Classic" and "AI" coexist --
-# a classic AI paper is genuinely both, and forcing a single choice would hide
-# it from one of the two filters someone would look under.
+# An episode can carry several: a paper can be both History and Economics, and
+# forcing a single choice would hide it from one of the two filters someone
+# would look under.
+#
+# There is deliberately no "classic" tag. Sorting by citations does that job
+# better -- it is a measured quantity rather than a judgement call, and it
+# ranks rather than merely including.
 #
 # The slug is what is stored and what appears in URLs, so renaming a label is
 # free but changing a slug orphans the episodes already tagged with it.
@@ -76,9 +80,15 @@ label = "Science"
 slug  = "policy"
 label = "Policy"
 
-[[categories]]
-slug  = "classic"
-label = "Classic"
+# Citation counts come from OpenAlex, which is free and needs no key. They are
+# never asked of the language model: a citation count is not printed in the
+# paper, so a model has nothing to read it off and would supply a plausible
+# number instead -- which here would drive the public sort order.
+#
+# Lookup is by DOI where the paper printed one. Failures are silent and leave
+# the count unset; type it in by hand on the episode instead.
+[citations]
+enabled = true
 
 [tts]
 # Models offered in the upload picker, first one the default. Verify IDs
