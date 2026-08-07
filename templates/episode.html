@@ -297,8 +297,10 @@
     {% endif %}
   </section>
 
-  <section class="stages">
-    <h2>Stage log</h2>
+  {# Collapsed by default: it is diagnostics, and most episodes never need it.
+     Opens itself when something went wrong, which is the one time you do. #}
+  <details class="stages"{% if ep.status == 'failed' or gaps %} open{% endif %}>
+    <summary>Stage log<span class="stagecount">{{ stages|length }} step{{ '' if stages|length == 1 else 's' }}</span></summary>
     <table>
       <tr><th>Stage</th><th>Started</th><th>Ended</th><th>OK</th><th>Detail</th></tr>
       {% for s in stages %}
@@ -311,7 +313,7 @@
       </tr>
       {% endfor %}
     </table>
-  </section>
+  </details>
 
   <section class="actions">
     <form action="/episode/{{ ep.id }}/retry" method="post">
