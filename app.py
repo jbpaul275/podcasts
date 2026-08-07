@@ -492,6 +492,7 @@ def _episode_view(row) -> dict:
         "tts_model": row["tts_model"] or CFG["models"]["tts"],
         "tts_model_pinned": bool(row["tts_model"]),
         "audio_built_at": row["audio_built_at"],
+        "script_updated_at": row["script_updated_at"],
         "script_model": row["script_model"] or CFG["models"]["script"],
         "grounding": db.grounding(row),
         "script_md_present": bool(row["script_md"]),
@@ -606,6 +607,32 @@ def _current_gaps(stages) -> list[str]:
     return [d for d in latest.values() if d]
 
 
+# What each admin action did, said back to you. Every one of these routes
+# redirects to the top of a long page, so without a message the only evidence
+# anything happened is a field further down that you have to go and find --
+# which reads exactly like a dead button.
+DONE_MESSAGES = {
+    "published": ("Published. It is now on the public site and in the feed.",
+                  "visibility"),
+    "unpublished": ("Unpublished. It is private again — the public site and the "
+                    "feed no longer list it.", "visibility"),
+    "reviewed": ("Citation flags marked as reviewed.", "flags"),
+    "edited": ("Saved.", None),
+    "reverted": ("Restored the previous script.", "scriptmodel"),
+    "rewriting": ("Rewriting the script. This page refreshes itself; the new "
+                  "script appears below when it lands.", "scriptmodel"),
+    "retrying": ("Re-running. This page refreshes itself while it works.", None),
+}
+
+
+def _done(episode_id: str, key: str) -> RedirectResponse:
+    anchor = DONE_MESSAGES.get(key, (None, None))[1]
+    url = f"/episode/{episode_id}?done={key}"
+    if anchor:
+        url += f"#{anchor}"
+    return RedirectResponse(url, status_code=303)
+
+
 def _short_error(text: str | None, limit: int = 150) -> str:
     """Errors can carry a whole ffmpeg stderr dump. The library gets a
     readable first line; the episode page keeps the full text."""
@@ -693,7 +720,7 @@ async def edit_episode(request: Request, episode_id: str):
             fields["year"] = None
 
     db.update_episode(episode_id, **fields)
-    return RedirectResponse(f"/episode/{episode_id}", status_code=303)
+    return _done(episode_id, "edited")
 
 
 @app.post("/episode/{episode_id}/publish")
@@ -718,7 +745,9 @@ def set_published(request: Request, episode_id: str,
         demoted = db.demote_siblings(row["sha256"], episode_id)
         if demoted:
             log.info("episode %s is now canonical; unpublished %s", episode_id, demoted)
-    return RedirectResponse(f"/episode/{episode_id}", status_code=303)
+    if not want and reviewed:
+        return _done(episode_id, "reviewed")
+    return _done(episode_id, "published" if want else "unpublished")
 
 
 def tts_choices() -> list[str]:
@@ -897,7 +926,7 @@ async def rewrite_script(request: Request, episode_id: str):
     }), status="queued", error=None)
     enqueue(episode_id, from_stage="scripting", stop_after="scripting")
     log.info("queued %s rewrite of %s (model=%s)", mode, episode_id, model or "default")
-    return RedirectResponse(f"/episode/{episode_id}?queued=1", status_code=303)
+    return _done(episode_id, "rewriting")
 
 
 @app.post("/episode/{episode_id}/script/revert")
@@ -908,7 +937,7 @@ def revert_script(request: Request, episode_id: str):
         raise HTTPException(404, "no such episode")
     if not db.restore_script(episode_id):
         raise HTTPException(400, "no previous script to restore")
-    return RedirectResponse(f"/episode/{episode_id}", status_code=303)
+    return _done(episode_id, "reverted")
 
 
 @app.get("/terms", response_class=HTMLResponse)
@@ -990,7 +1019,7 @@ async def upload(request: Request, file: UploadFile, tts_model: str = Form("")):
 
 
 @app.get("/episode/{episode_id}", response_class=HTMLResponse)
-def episode_page(request: Request, episode_id: str):
+def episode_page(request: Request, episode_id: str, done: str = ""):
     row = db.get_episode(episode_id)
     if not row:
         raise HTTPException(404, "no such episode")
@@ -1015,6 +1044,7 @@ def episode_page(request: Request, episode_id: str):
         {
             "ep": view,
             "admin": admin_mode,
+            "done": DONE_MESSAGES.get(done, (None, None))[0] if admin_mode else None,
             "gaps": gaps,
             "signed_in": admin_mode,
             "lines": _script_lines(row["script_md"], view["flags"]) if row["script_md"] else [],
@@ -1105,7 +1135,7 @@ def retry(request: Request, episode_id: str, stage: str = Form("extracting")):
         raise HTTPException(400, f"unknown stage {stage!r}")
     db.update_episode(episode_id, status="queued", error=None)
     enqueue(episode_id, stage)
-    return RedirectResponse(f"/episode/{episode_id}", status_code=303)
+    return _done(episode_id, "retrying")
 
 
 @app.delete("/episode/{episode_id}")

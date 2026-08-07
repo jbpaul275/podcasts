@@ -149,7 +149,8 @@ main.wide { max-width: 62rem; }
 .rewritebox .hint { font-size: 0.78rem; color: var(--muted); margin: 0.35rem 0 1rem; line-height: 1.5; }
 .rewritebox label { display: block; font-size: 0.8rem; font-weight: 600; margin: 0.9rem 0 0.3rem; }
 .rwactions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.75rem; }
-button.secondary { background: transparent; color: var(--muted); border: 1px solid #d9d9d6; }
+button.secondary { background: transparent; color: var(--muted); border: 1px solid var(--rule); }
+button.secondary:hover { color: var(--ink); border-color: var(--muted); }
 .revertform { margin-top: 1rem; display: flex; gap: 0.6rem; align-items: center; }
 .status-needs_review { background: #eef2fb; color: #2f4f8f; }
 
@@ -283,8 +284,16 @@ audio { width: 100%; margin-top: 0.85rem; }
 
 .actions { display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; margin-top: 2.5rem; }
 .actions form { display: flex; gap: 0.5rem; align-items: center; }
-button, select { font: inherit; font-size: 0.9rem; padding: 0.35rem 0.7rem; border: 1px solid var(--rule); border-radius: 6px; background: var(--card); cursor: pointer; }
-.danger { color: var(--err); border-color: #f3c9c4; margin-left: auto; }
+button, select, textarea, input[type="text"], input[type="url"] {
+  font: inherit; font-size: 0.9rem; padding: 0.35rem 0.7rem;
+  border: 1px solid var(--rule); border-radius: 6px;
+  background: var(--card); color: var(--ink);
+}
+button, select { cursor: pointer; }
+button:hover { border-color: var(--a); color: var(--a); }
+button:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--a); outline-offset: 1px; }
+.danger { color: var(--err); border-color: color-mix(in srgb, var(--err) 40%, transparent); margin-left: auto; }
+.danger:hover { border-color: var(--err); color: var(--err); }
 
 @media (prefers-color-scheme: dark) {
   :root {
@@ -296,6 +305,9 @@ button, select { font: inherit; font-size: 0.9rem; padding: 0.35rem 0.7rem; bord
   .status-done { background: #14301f; color: #7bd6a0; }
   .status-failed { background: #33191a; color: var(--err); }
   .status-queued { background: #23262c; }
+  .status-needs_review { background: #1b2333; color: #9db6e0; }
+  .stalewarn, .promptwarn { background: #2a2417; }
+  .flash.ok { background: #16281d; color: #7bd6a0; }
   .status-extracting, .status-scripting, .status-synthesizing, .status-assembling { background: #2c2519; color: #e0a458; }
 }
 
