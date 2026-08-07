@@ -102,6 +102,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
                        ("script_updated_at", "TEXT"),
                        ("rewrite_json", "TEXT"),
                        ("progress_at", "TEXT"),
+                       ("episode_number", "INTEGER"),
                        ("flags_reviewed", "INTEGER DEFAULT 0")):
         if name not in cols:
             conn.execute(f"ALTER TABLE episode ADD COLUMN {name} {decl}")
@@ -130,6 +131,48 @@ def list_episodes(published_only: bool = False) -> list[sqlite3.Row]:
     return get_conn().execute(
         f"SELECT * FROM episode {where} ORDER BY created_at DESC, id DESC"
     ).fetchall()
+
+
+def assign_episode_number(episode_id: str) -> int | None:
+    """Give an episode its number, the first time it is published.
+
+    Assigned at publish rather than at upload because the two orders are not
+    the same. Papers that failed, that are still private, and the extra
+    renderings created when comparing voice models would all consume numbers
+    they never use, and the public feed would count 1, 2, 5, 9.
+
+    Once given, a number is never taken back or reused -- unpublishing keeps
+    it, so a listener's "episode 7" still means the same episode afterwards.
+
+    A re-voiced rendering inherits the number of its sibling: it is the same
+    paper and the same discussion in a different voice, and publishing it
+    unpublishes the other. Calling that a new episode would advertise a
+    duplicate.
+    """
+    conn = get_conn()
+    row = conn.execute("SELECT sha256, episode_number FROM episode WHERE id = ?",
+                       (episode_id,)).fetchone()
+    if row is None or row["episode_number"] is not None:
+        return row["episode_number"] if row else None
+
+    number = None
+    if row["sha256"]:
+        prior = conn.execute(
+            "SELECT episode_number FROM episode WHERE sha256 = ? AND id != ? "
+            "AND episode_number IS NOT NULL ORDER BY episode_number LIMIT 1",
+            (row["sha256"], episode_id),
+        ).fetchone()
+        if prior:
+            number = prior["episode_number"]
+    if number is None:
+        highest = conn.execute(
+            "SELECT MAX(episode_number) AS n FROM episode").fetchone()["n"]
+        number = (highest or 0) + 1
+
+    conn.execute("UPDATE episode SET episode_number = ? WHERE id = ?",
+                 (number, episode_id))
+    conn.commit()
+    return number
 
 
 def siblings(sha256: str | None, exclude_id: str) -> list[sqlite3.Row]:

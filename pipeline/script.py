@@ -13,6 +13,7 @@ from config import PAPERS_DIR, load_prompt
 from . import ModelUnusable, PipelineError
 from .gemini import (call_with_retry, client, pdf_part, record_cost,
                      resolved_model, strip_fences)
+from prose import title_case
 
 log = logging.getLogger("paperpod.script")
 
@@ -327,7 +328,12 @@ def generate_title(episode_id: str, script: str, cfg: dict) -> str | None:
     title = " ".join(title.splitlines()[0].split()) if title else ""
     if not title or len(title) > 120:
         return None
-    return title
+    # The prompt asks for Title Case; this makes it so. A model follows a
+    # capitalization instruction most of the time, and "most of the time" is
+    # precisely the failure -- one title in sentence case beside one in title
+    # case reads as sloppiness. Applied only to generated titles: a title typed
+    # by a person is left exactly as typed.
+    return title_case(title)
 
 
 def _clean(text: str) -> str:

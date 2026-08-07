@@ -553,6 +553,7 @@ def _episode_view(row) -> dict:
         "cost_usd": row["cost_usd"] or 0.0,
         "cost_breakdown": _cost_rows(row),
         "published": bool(row["published"]),
+        "number": row["episode_number"],
         "flags_reviewed": bool(row["flags_reviewed"]),
         "flag_count": len(unverified),
         "flags": flags,
@@ -815,6 +816,10 @@ def set_published(request: Request, episode_id: str,
             raise HTTPException(400, f"cannot publish: {blocker}")
     db.update_episode(episode_id, published=1 if want else 0)
     if want:
+        # Numbered on the way out, not on the way in: uploads that failed, that
+        # are still private, or that are alternate renderings would otherwise
+        # eat numbers the feed never shows.
+        db.assign_episode_number(episode_id)
         demoted = db.demote_siblings(row["sha256"], episode_id)
         if demoted:
             log.info("episode %s is now canonical; unpublished %s", episode_id, demoted)
@@ -1575,7 +1580,12 @@ def feed():
         # UI uses for "unknown" -- that is not a duration and fails validation.
         duration = (f"\n      <itunes:duration>{int(round(float(row['duration_s'])))}"
                     "</itunes:duration>" if row["duration_s"] else "")
-        items.append(f"""    <item>
+        # Optional for an episodic show, and omitted rather than sent as 0 for
+        # anything published before numbering existed -- Apple requires a
+        # non-zero integer, so a placeholder would be a validation failure.
+        number = (f"\n      <itunes:episode>{int(row['episode_number'])}</itunes:episode>"
+                  if row["episode_number"] else "")
+        items.append(f"""    <item>{number}
       <title>{xml_escape(title)}</title>
       <description>{xml_escape(summary)}</description>
       <itunes:summary>{xml_escape(summary)}</itunes:summary>

@@ -420,3 +420,4 @@ a.tag:hover { border-color: var(--a); color: var(--a); }
 .backfill ul.plain { font-size: 0.85rem; line-height: 1.7; margin-top: 0.8rem; }
 .backfill form + ul.plain { margin-top: 1rem; }
 .buildstamp { font-variant-numeric: tabular-nums; opacity: 0.75; }
+.epnum { font-variant-numeric: tabular-nums; }

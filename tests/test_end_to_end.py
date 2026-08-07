@@ -3344,3 +3344,41 @@ def test_a_failure_inside_the_pipeline_is_not_silently_restarted(env, tmp_path):
     with pytest.raises(DuplicateEpisode):
         ingest.ingest_pdf(pdf, env["cfg"])
     assert db.get_episode(episode_id)["status"] == "failed", "not requeued behind your back"
+
+
+def test_the_feed_carries_the_episode_number(client, env, tmp_path):
+    import db
+
+    eid = _live_episode(env, tmp_path, "numbered.pdf")
+    db.assign_episode_number(eid)
+
+    xml = client.get("/feed.xml").text
+    assert "<itunes:episode>1</itunes:episode>" in xml
+    assert f"Episode 1" in client.get(f"/episode/{eid}").text
+
+
+def test_an_unnumbered_episode_omits_the_tag_rather_than_sending_zero(client, env, tmp_path):
+    """Apple wants a non-zero integer, so a placeholder for episodes published
+    before numbering existed would be a validation failure."""
+    _live_episode(env, tmp_path, "old.pdf")
+
+    xml = client.get("/feed.xml").text
+    assert "<itunes:episode>" not in xml
+    assert "<item>" in xml, "the episode is still in the feed"
+
+
+def test_publishing_assigns_the_number(client, env, tmp_path):
+    import db
+
+    episode_id = _done_episode(env, tmp_path)
+    db.update_episode(episode_id, flags_reviewed=1)
+    assert db.get_episode(episode_id)["episode_number"] is None
+
+    client.post(f"/episode/{episode_id}/publish", data={"published": "1"},
+                follow_redirects=False)
+    assert db.get_episode(episode_id)["episode_number"] == 1
+
+    # Unpublishing keeps it.
+    client.post(f"/episode/{episode_id}/publish", data={"published": "0"},
+                follow_redirects=False)
+    assert db.get_episode(episode_id)["episode_number"] == 1
