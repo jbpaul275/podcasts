@@ -148,8 +148,19 @@
   document.querySelectorAll(".delete-episode").forEach((del) => {
     del.addEventListener("click", () => {
       if (!confirm("Delete this episode, its PDF, and its audio?")) return;
-      fetch("/episode/" + del.dataset.episode, { method: "DELETE" })
-        .then((r) => { if (!r.ok) throw new Error(); window.location.reload(); })
+      const id = del.dataset.episode;
+      fetch("/episode/" + id, { method: "DELETE" })
+        .then((r) => {
+          if (!r.ok) throw new Error();
+          // Reloading the page of the episode you just deleted lands on its
+          // own 404 — the delete worked, but it reads as a failure.
+          const here = document.querySelector("article.episode");
+          if (here && here.dataset.episode === id) {
+            window.location.href = "/admin?deleted=1";
+          } else {
+            window.location.reload();
+          }
+        })
         .catch(() => alert("Delete failed."));
     });
   });
