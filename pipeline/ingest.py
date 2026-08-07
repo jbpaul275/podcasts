@@ -140,17 +140,28 @@ def extract_metadata(episode_id: str, cfg: dict) -> None:
     refresh_citations(episode_id, cfg)
 
 
-def refresh_citations(episode_id: str, cfg: dict) -> int | None:
+HAND_ENTERED = "entered by hand"
+
+
+def refresh_citations(episode_id: str, cfg: dict, force: bool = False) -> int | None:
     """Look up the citation count and store it, or leave it alone.
 
     Wrapped so a lookup can never fail an episode: an unreachable third party
-    is not a reason to lose a finished podcast. A count already entered by hand
-    is only overwritten by a real answer, never by a failed lookup.
+    is not a reason to lose a finished podcast.
+
+    A number entered by hand survives automatic lookups. Somebody typed it
+    because the automatic route did not work, or because they preferred a
+    different source, and having re-running a stage quietly undo that is how
+    manual entry stops being worth doing. `force` is the explicit button.
     """
     if not (cfg.get("citations", {}) or {}).get("enabled", True):
         return None
     row = db.get_episode(episode_id)
     if not row:
+        return None
+    if not force and row["cited_by_source"] == HAND_ENTERED:
+        log.info("episode %s has a hand-entered citation count; leaving it",
+                 episode_id)
         return None
     try:
         found = citations.lookup(row["doi"], row["title"], cfg)

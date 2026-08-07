@@ -2639,3 +2639,30 @@ def test_there_is_no_classic_category_any_more():
     from config import categories, load_config
 
     assert "classic" not in {c["slug"] for c in categories(load_config())}
+
+
+def test_a_typo_in_the_citation_field_is_refused(client, env, tmp_path):
+    """Silently discarding it would wipe a number that took effort to find."""
+    import db
+
+    eid = _paper(env, tmp_path, "typo.pdf", year=2020, cited=4321,
+                 created="2026-01-01T00:00:00+00:00")
+    for bad in ("about a thousand", "-5", "12.5"):
+        resp = client.post(f"/episode/{eid}/edit", data={"cited_by": bad})
+        assert resp.status_code == 400, bad
+        assert db.get_episode(eid)["cited_by"] == 4321, f"{bad} must not clear it"
+
+
+def test_clearing_the_count_clears_its_provenance(client, env, tmp_path):
+    """Otherwise the card claims a source for a number that is not there."""
+    import db
+
+    eid = _paper(env, tmp_path, "prov.pdf", year=2020, cited=7,
+                 created="2026-01-01T00:00:00+00:00")
+    client.post(f"/episode/{eid}/edit", data={"cited_by": "500"})
+    assert db.get_episode(eid)["cited_by_source"] == "entered by hand"
+
+    client.post(f"/episode/{eid}/edit", data={"cited_by": ""})
+    row = db.get_episode(eid)
+    assert row["cited_by"] is None
+    assert row["cited_by_source"] is None and row["cited_by_at"] is None

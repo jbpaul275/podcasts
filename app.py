@@ -733,14 +733,24 @@ async def edit_episode(request: Request, episode_id: str):
     if "doi" in form:
         fields["doi"] = ingest.citations.normalize_doi(sent("doi"))
     if "cited_by" in form:
-        raw = (sent("cited_by") or "").replace(",", "")
-        try:
-            fields["cited_by"] = max(0, int(raw)) if raw else None
-        except ValueError:
-            fields["cited_by"] = None
-        if fields["cited_by"] is not None:
-            fields["cited_by_source"] = "entered by hand"
-            fields["cited_by_at"] = db.now_iso()
+        raw = (sent("cited_by") or "").replace(",", "").replace(" ", "")
+        if not raw:
+            # Cleared means "not known" -- so the provenance goes with it,
+            # rather than leaving the card claiming a source for no number.
+            fields.update(cited_by=None, cited_by_source=None, cited_by_at=None)
+        else:
+            try:
+                count = int(raw)
+                if count < 0:
+                    raise ValueError(raw)
+            except ValueError:
+                # Silently discarding a typo would wipe a number that took
+                # effort to find, and say nothing about why.
+                raise HTTPException(
+                    400, f"citations must be a whole number, not {raw!r}. "
+                         "Leave it empty for “not known”.")
+            fields.update(cited_by=count, cited_by_source=ingest.HAND_ENTERED,
+                          cited_by_at=db.now_iso())
     if "source_url" in form:
         fields["source_url"] = safe_url(str(form["source_url"]))
     if "year" in form:
@@ -967,7 +977,9 @@ def refresh_citations_route(request: Request, episode_id: str):
     require_admin(request)
     if not db.get_episode(episode_id):
         raise HTTPException(404, "no such episode")
-    found = ingest.refresh_citations(episode_id, CFG)
+    # Explicit button, so it overrides a hand-entered number -- unlike the
+    # automatic lookup during extraction, which leaves one alone.
+    found = ingest.refresh_citations(episode_id, CFG, force=True)
     return RedirectResponse(
         f"/episode/{episode_id}?done={'cited' if found is not None else 'nocite'}"
         "#citations", status_code=303)

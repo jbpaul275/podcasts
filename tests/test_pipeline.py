@@ -1139,9 +1139,20 @@ def test_a_lookup_failure_never_touches_the_episode(_isolated_db, monkeypatch):
     assert ingest.refresh_citations("ECITE", {}) is None
     assert db.get_episode("ECITE")["cited_by"] == 12, "a miss must not clear it"
 
+    # A hand-entered number survives an automatic lookup: somebody typed it
+    # because the automatic route did not work, and re-running a stage must not
+    # quietly undo that.
     monkeypatch.setattr(citations, "lookup", lambda *a, **k: (500, "openalex"))
-    assert ingest.refresh_citations("ECITE", {}) == 500
+    assert ingest.refresh_citations("ECITE", {}) is None
+    assert db.get_episode("ECITE")["cited_by"] == 12
+
+    # The explicit button says otherwise.
+    assert ingest.refresh_citations("ECITE", {}, force=True) == 500
     assert db.get_episode("ECITE")["cited_by"] == 500
+
+    # A looked-up number carries no such protection.
+    monkeypatch.setattr(citations, "lookup", lambda *a, **k: (600, "openalex"))
+    assert ingest.refresh_citations("ECITE", {}) == 600
 
 
 def test_citations_can_be_switched_off(_isolated_db, monkeypatch):
