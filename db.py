@@ -92,6 +92,11 @@ def _migrate(conn: sqlite3.Connection) -> None:
                        ("grounding_json", "TEXT"),
                        ("published", "INTEGER DEFAULT 0"),
                        ("progress", "TEXT"),
+                       ("categories", "TEXT"),
+                       ("doi", "TEXT"),
+                       ("cited_by", "INTEGER"),
+                       ("cited_by_at", "TEXT"),
+                       ("cited_by_source", "TEXT"),
                        ("script_prev", "TEXT"),
                        ("script_note", "TEXT"),
                        ("script_updated_at", "TEXT"),
@@ -195,6 +200,16 @@ def restore_script(id: str) -> bool:
     update_episode(id, script_md=row["script_prev"], script_prev=row["script_md"],
                    script_note=None, script_updated_at=now_iso())
     return True
+
+
+def episode_categories(row) -> list[str]:
+    """Tag slugs on an episode. Stored as JSON so an episode can carry several
+    -- a classic AI paper belongs under both filters, not one."""
+    try:
+        val = json.loads(row["categories"]) if row["categories"] else []
+    except (json.JSONDecodeError, TypeError):
+        return []
+    return [str(v) for v in val] if isinstance(val, list) else []
 
 
 def set_progress(id: str, note: str | None) -> None:

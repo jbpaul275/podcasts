@@ -156,6 +156,14 @@ def env(tmp_path, monkeypatch):
         "server": {"base_url": "http://paperpod.test:8000", "port": 8000},
         "feed": {"title": "Paperpod", "description": "Test feed", "author": "Paperpod"},
         "costs": {},
+        "categories": [
+            {"slug": "ai", "label": "AI"},
+            {"slug": "economics", "label": "Economics"},
+            {"slug": "history", "label": "History"},
+            {"slug": "science", "label": "Science"},
+            {"slug": "policy", "label": "Policy"},
+            {"slug": "classic", "label": "Classic"},
+        ],
     }
     return {"tmp": tmp_path, "cfg": cfg, "calls": calls, "papers": papers,
             "chunks": chunks, "final": final}
@@ -2421,6 +2429,243 @@ def test_an_unknown_done_key_renders_nothing(client, env, tmp_path):
     assert "alert(1)" not in body
 
 
+# --------------------------------------------------------------- categories
+
+def _tagged(env, tmp_path, name, tags, published=True):
+    import db
+    from pipeline import ingest
+
+    pdf = tmp_path / name
+    _make_pdf(pdf)
+    eid = ingest.ingest_pdf(pdf, env["cfg"])
+    db.update_episode(eid, status="done", published=1 if published else 0,
+                      flags_reviewed=1, title=name,
+                      categories=json.dumps(tags))
+    return eid
+
+
+def test_an_episode_can_carry_several_categories(client, env, tmp_path):
+    """The whole reason for multi-tag: a classic AI paper is genuinely both,
+    and a single choice would hide it from one of the two filters."""
+    import db
+    import app as app_mod
+
+    eid = _tagged(env, tmp_path, "both.pdf", ["ai", "classic"])
+    view = app_mod._episode_view(db.get_episode(eid))
+    assert view["categories"] == ["ai", "classic"]
+
+    for slug in ("ai", "classic"):
+        assert "both.pdf" in client.get(f"/?category={slug}").text, slug
+
+
+def test_filtering_narrows_the_list(client, env, tmp_path):
+    _tagged(env, tmp_path, "ai-one.pdf", ["ai"])
+    _tagged(env, tmp_path, "hist-one.pdf", ["history"])
+
+    body = client.get("/?category=ai").text
+    assert "ai-one.pdf" in body and "hist-one.pdf" not in body
+
+    both = client.get("/").text
+    assert "ai-one.pdf" in both and "hist-one.pdf" in both
+
+
+def test_chips_only_show_categories_with_episodes(client, env, tmp_path):
+    """An empty chip is a dead end -- it invites a click that lands on nothing."""
+    _tagged(env, tmp_path, "only-ai.pdf", ["ai"])
+    body = client.get("/").text
+    assert ">AI<" in body
+    assert ">Policy<" not in body, "no episode is tagged policy"
+
+
+def test_chip_counts_match_what_is_rendered(client, env, tmp_path):
+    _tagged(env, tmp_path, "a.pdf", ["ai"])
+    _tagged(env, tmp_path, "b.pdf", ["ai", "classic"])
+    body = client.get("/").text
+    # 2 under AI, 1 under Classic, 2 in All.
+    assert 'AI<span class="chipn">2</span>' in body
+    assert 'Classic<span class="chipn">1</span>' in body
+    assert 'All<span class="chipn">2</span>' in body
+
+
+def test_an_unknown_category_shows_everything(client, env, tmp_path):
+    """`category` comes from the query string; a bad one must not empty the site."""
+    _tagged(env, tmp_path, "x.pdf", ["ai"])
+    body = client.get("/?category=<script>nope</script>").text
+    assert "x.pdf" in body
+    assert "nope" not in body
+
+
+def test_the_public_filter_still_hides_private_episodes(client, env, tmp_path):
+    """Filtering must not become a way around publication."""
+    _tagged(env, tmp_path, "secret.pdf", ["ai"], published=False)
+    assert "secret.pdf" not in client.get("/?category=ai").text
+
+
+def test_only_known_slugs_are_stored(env):
+    """A tag the site has no filter for would silently drop the episode out of
+    every list it should appear in."""
+    from pipeline.ingest import clean_categories
+
+    assert clean_categories(["AI", "made-up", "classic"], env["cfg"]) == ["ai", "classic"]
+    assert clean_categories("not a list", env["cfg"]) == []
+    assert clean_categories(None, env["cfg"]) == []
+
+
+def test_categories_are_editable_in_the_admin(client, env, tmp_path):
+    import db
+
+    eid = _tagged(env, tmp_path, "edit.pdf", ["ai"])
+    client.post(f"/episode/{eid}/edit",
+                data={"categories_submitted": "1", "categories": ["history", "classic"]})
+    assert db.episode_categories(db.get_episode(eid)) == ["history", "classic"]
+
+    # Clearing every box sends no "categories" key at all -- the hidden marker
+    # is what distinguishes that from a form with no tag fields.
+    client.post(f"/episode/{eid}/edit", data={"categories_submitted": "1"})
+    assert db.episode_categories(db.get_episode(eid)) == []
+
+    # A form without the marker leaves them alone.
+    db.update_episode(eid, categories=json.dumps(["ai"]))
+    client.post(f"/episode/{eid}/edit", data={"summary": "Just the summary."})
+    assert db.episode_categories(db.get_episode(eid)) == ["ai"]
+
+
+def test_the_metadata_prompt_offers_only_configured_slugs(env):
+    from pipeline.ingest import _metadata_prompt
+
+    prompt = _metadata_prompt(env["cfg"])
+    assert '"ai" — AI' in prompt
+    assert "$CATEGORIES" not in prompt, "the placeholder must be substituted"
+
+
+# ------------------------------------------------------------------- sorting
+
+def _paper(env, tmp_path, name, *, year, cited, created):
+    import db
+    from pipeline import ingest
+
+    pdf = tmp_path / name
+    _make_pdf(pdf)
+    eid = ingest.ingest_pdf(pdf, env["cfg"])
+    db.update_episode(eid, status="done", published=1, flags_reviewed=1,
+                      title=name, year=year, cited_by=cited, created_at=created)
+    return eid
+
+
+def _order(body, names):
+    return sorted(names, key=lambda n: body.index(n) if n in body else 10**9)
+
+
+def test_the_three_sorts_each_order_differently(client, env, tmp_path):
+    _paper(env, tmp_path, "old-famous.pdf", year=1948, cited=90000,
+           created="2026-01-01T00:00:00+00:00")
+    _paper(env, tmp_path, "new-quiet.pdf", year=2025, cited=3,
+           created="2026-08-01T00:00:00+00:00")
+    _paper(env, tmp_path, "mid.pdf", year=1994, cited=500,
+           created="2026-04-01T00:00:00+00:00")
+    names = ["old-famous.pdf", "new-quiet.pdf", "mid.pdf"]
+
+    assert _order(client.get("/?sort=created").text, names) == [
+        "new-quiet.pdf", "mid.pdf", "old-famous.pdf"]
+    assert _order(client.get("/?sort=published").text, names) == [
+        "new-quiet.pdf", "mid.pdf", "old-famous.pdf"]
+    assert _order(client.get("/?sort=cited").text, names) == [
+        "old-famous.pdf", "mid.pdf", "new-quiet.pdf"]
+
+
+def test_newest_first_is_the_default(client, env, tmp_path):
+    _paper(env, tmp_path, "first.pdf", year=2000, cited=1,
+           created="2026-01-01T00:00:00+00:00")
+    _paper(env, tmp_path, "second.pdf", year=1900, cited=999,
+           created="2026-08-01T00:00:00+00:00")
+    names = ["first.pdf", "second.pdf"]
+    assert _order(client.get("/").text, names) == ["second.pdf", "first.pdf"]
+    assert _order(client.get("/?sort=nonsense").text, names) == ["second.pdf", "first.pdf"]
+
+
+def test_an_unknown_citation_count_sorts_below_a_real_zero(client, env, tmp_path):
+    """Unknown and zero are different facts; lumping them together would bury a
+    paper that simply has not been looked up yet."""
+    _paper(env, tmp_path, "zero.pdf", year=2020, cited=0,
+           created="2026-01-01T00:00:00+00:00")
+    _paper(env, tmp_path, "unknown.pdf", year=2020, cited=None,
+           created="2026-02-01T00:00:00+00:00")
+    names = ["zero.pdf", "unknown.pdf"]
+    assert _order(client.get("/?sort=cited").text, names) == ["zero.pdf", "unknown.pdf"]
+
+
+def test_sort_and_category_compose(client, env, tmp_path):
+    import db
+
+    a = _paper(env, tmp_path, "ai-big.pdf", year=2017, cited=9000,
+               created="2026-01-01T00:00:00+00:00")
+    b = _paper(env, tmp_path, "ai-small.pdf", year=2020, cited=5,
+               created="2026-02-01T00:00:00+00:00")
+    c = _paper(env, tmp_path, "econ.pdf", year=1994, cited=99999,
+               created="2026-03-01T00:00:00+00:00")
+    db.update_episode(a, categories=json.dumps(["ai"]))
+    db.update_episode(b, categories=json.dumps(["ai"]))
+    db.update_episode(c, categories=json.dumps(["economics"]))
+
+    body = client.get("/?sort=cited&category=ai").text
+    assert "econ.pdf" not in body, "the category filter still applies"
+    assert _order(body, ["ai-big.pdf", "ai-small.pdf"]) == ["ai-big.pdf", "ai-small.pdf"]
+    # The chips keep you in the sort you chose.
+    assert "sort=cited" in body
+
+
+def test_citation_counts_are_shown(client, env, tmp_path):
+    _paper(env, tmp_path, "cited.pdf", year=2017, cited=90210,
+           created="2026-01-01T00:00:00+00:00")
+    assert "90,210 citations" in client.get("/").text
+
+
+def test_a_hand_entered_count_is_marked_as_such(client, env, tmp_path):
+    import db
+
+    eid = _paper(env, tmp_path, "manual.pdf", year=2017, cited=None,
+                 created="2026-01-01T00:00:00+00:00")
+    client.post(f"/episode/{eid}/edit", data={"cited_by": "1,234"})
+    row = db.get_episode(eid)
+    assert row["cited_by"] == 1234, "commas in a pasted number are fine"
+    assert row["cited_by_source"] == "entered by hand"
+
+    client.post(f"/episode/{eid}/edit", data={"cited_by": ""})
+    assert db.get_episode(eid)["cited_by"] is None, "clearing means not known"
+
+
+def test_there_is_no_classic_category_any_more():
+    """Citations rank; a tag only includes. Sorting does the job better."""
+    from config import categories, load_config
+
+    assert "classic" not in {c["slug"] for c in categories(load_config())}
+
+
+def test_a_typo_in_the_citation_field_is_refused(client, env, tmp_path):
+    """Silently discarding it would wipe a number that took effort to find."""
+    import db
+
+    eid = _paper(env, tmp_path, "typo.pdf", year=2020, cited=4321,
+                 created="2026-01-01T00:00:00+00:00")
+    for bad in ("about a thousand", "-5", "12.5"):
+        resp = client.post(f"/episode/{eid}/edit", data={"cited_by": bad})
+        assert resp.status_code == 400, bad
+        assert db.get_episode(eid)["cited_by"] == 4321, f"{bad} must not clear it"
+
+
+def test_clearing_the_count_clears_its_provenance(client, env, tmp_path):
+    """Otherwise the card claims a source for a number that is not there."""
+    import db
+
+    eid = _paper(env, tmp_path, "prov.pdf", year=2020, cited=7,
+                 created="2026-01-01T00:00:00+00:00")
+    client.post(f"/episode/{eid}/edit", data={"cited_by": "500"})
+    assert db.get_episode(eid)["cited_by_source"] == "entered by hand"
+
+    client.post(f"/episode/{eid}/edit", data={"cited_by": ""})
+    row = db.get_episode(eid)
+    assert row["cited_by"] is None
+    assert row["cited_by_source"] is None and row["cited_by_at"] is None
 # ------------------------------------------------------------ deleting cleanly
 
 def test_deleting_the_episode_you_are_viewing_leaves_the_page(client, env, tmp_path):

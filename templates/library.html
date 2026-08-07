@@ -12,6 +12,37 @@
   <p class="blurb">{{ feed_description }}</p>
 </div>
 
+{% if chips or sorts %}
+<div class="browsebar">
+{% endif %}
+
+{% if chips %}
+  {# Real links, not JS: each filter is shareable, bookmarkable, and works
+     with the back button. #}
+  <nav class="chips" aria-label="Filter by category">
+    {% for c in chips %}
+      <a class="chip{{ ' on' if c.selected }}"
+         href="{{ (admin and '/admin' or '/') }}?sort={{ sort }}{{ c.slug and ('&category=' ~ c.slug) or '' }}"
+         {% if c.selected %}aria-current="true"{% endif %}>{{ c.label }}<span class="chipn">{{ c.count }}</span></a>
+    {% endfor %}
+  </nav>
+{% endif %}
+
+{% if sorts %}
+  <nav class="sorts" aria-label="Sort order">
+    <span class="sortlabel">Sort</span>
+    {% for s in sorts %}
+      <a class="chip{{ ' on' if s.key == sort }}"
+         href="{{ (admin and '/admin' or '/') }}?sort={{ s.key }}{{ category and ('&category=' ~ category) or '' }}"
+         {% if s.key == sort %}aria-current="true"{% endif %}>{{ s.label }}</a>
+    {% endfor %}
+  </nav>
+{% endif %}
+
+{% if chips or sorts %}
+</div>
+{% endif %}
+
 {% if admin and error %}<p class="error flash">{{ error }}</p>{% endif %}
 {% if deleted %}<p class="flash ok" role="status">Episode deleted, along with its PDF and audio.</p>{% endif %}
 
@@ -37,6 +68,8 @@
       {% if ep.status != 'done' %}<span class="status status-{{ ep.status }}">{{ ep.status_label or ep.status }}</span>{% endif %}
       {% if admin %}<span class="status status-{{ 'done' if ep.published else 'queued' }}">{{ 'public' if ep.published else 'private' }}</span>{% endif %}
       {% if admin and ep.flag_count %}<a class="flagcount" href="/episode/{{ ep.id }}#flags">{{ ep.flag_count }} flag{{ '' if ep.flag_count == 1 else 's' }}</a>{% endif %}
+      {% if ep.cited_by is not none %}<span class="cites" title="Citations, via {{ ep.cited_by_source }}">{{ '{:,}'.format(ep.cited_by) }} citations</span>{% endif %}
+      {% for c in ep.category_labels %}<span class="tag">{{ c }}</span>{% endfor %}
     </p>
   </li>
 {% endfor %}
@@ -44,7 +77,9 @@
 
 {% if not episodes %}
   <p class="empty">
-    {%- if not admin -%}
+    {%- if category -%}
+      Nothing under {{ category_label }} yet. <a href="{{ admin and '/admin' or '/' }}">Show everything</a>.
+    {%- elif not admin -%}
       No episodes published yet.
     {%- elif failed -%}
       No finished episodes yet — see the failures below.

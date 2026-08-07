@@ -40,6 +40,8 @@ from config import (
     PAPERS_DIR,
     PROCESSED_DIR,
     ROOT,
+    categories,
+    category_labels,
     is_prompt_name,
     load_config,
     prompt_default,
@@ -486,6 +488,8 @@ def _grounding_corpus(row) -> str | None:
 
 
 def _episode_view(row) -> dict:
+    cats = db.episode_categories(row)
+    labels = category_labels(CFG)
     flags = (
         script_mod.citation_flags(row["script_md"], _paper_text(row["id"]),
                                   _grounding_corpus(row))
@@ -519,6 +523,12 @@ def _episode_view(row) -> dict:
         "grounding": db.grounding(row),
         "script_md_present": bool(row["script_md"]),
         "summary": _blurb(row),
+        "categories": cats,
+        "doi": row["doi"],
+        "cited_by": row["cited_by"],
+        "cited_by_at": row["cited_by_at"],
+        "cited_by_source": row["cited_by_source"],
+        "category_labels": [labels.get(c, c) for c in cats],
         "authors": authors,
         "year": row["year"],
         "abstract": row["abstract"],
@@ -644,6 +654,10 @@ DONE_MESSAGES = {
     "rewriting": ("Rewriting the script. This page refreshes itself; the new "
                   "script appears below when it lands.", "scriptmodel"),
     "retrying": ("Re-running. This page refreshes itself while it works.", None),
+    "cited": ("Citation count updated.", "citations"),
+    "nocite": ("No citation count found. OpenAlex has no record matching this "
+               "paper's DOI or title — type the number in by hand below.",
+               "citations"),
 }
 
 
@@ -695,11 +709,12 @@ def logout():
 
 
 @app.get("/admin", response_class=HTMLResponse)
-def admin(request: Request, error: str = "", deleted: str = ""):
+def admin(request: Request, error: str = "", deleted: str = "",
+          category: str = "", sort: str = ""):
     if not auth.is_admin(request):
         return RedirectResponse("/admin/login", status_code=303)
     return _render_library(request, admin_mode=True, error=error,
-                           deleted=bool(deleted))
+                           deleted=bool(deleted), category=category, sort=sort)
 
 
 @app.post("/episode/{episode_id}/edit")
@@ -733,6 +748,33 @@ async def edit_episode(request: Request, episode_id: str):
     if "authors" in form:
         names = [" ".join(a.split()) for a in str(form["authors"]).split(",")]
         fields["authors"] = json.dumps([a for a in names if a])
+    if "categories_submitted" in form:
+        # Checkboxes send nothing when all are cleared, so a hidden marker is
+        # what separates "untag everything" from "this form has no tag fields".
+        chosen = set(form.getlist("categories"))
+        fields["categories"] = json.dumps(
+            [c["slug"] for c in categories(CFG) if c["slug"] in chosen])
+    if "doi" in form:
+        fields["doi"] = ingest.citations.normalize_doi(sent("doi"))
+    if "cited_by" in form:
+        raw = (sent("cited_by") or "").replace(",", "").replace(" ", "")
+        if not raw:
+            # Cleared means "not known" -- so the provenance goes with it,
+            # rather than leaving the card claiming a source for no number.
+            fields.update(cited_by=None, cited_by_source=None, cited_by_at=None)
+        else:
+            try:
+                count = int(raw)
+                if count < 0:
+                    raise ValueError(raw)
+            except ValueError:
+                # Silently discarding a typo would wipe a number that took
+                # effort to find, and say nothing about why.
+                raise HTTPException(
+                    400, f"citations must be a whole number, not {raw!r}. "
+                         "Leave it empty for “not known”.")
+            fields.update(cited_by=count, cited_by_source=ingest.HAND_ENTERED,
+                          cited_by_at=db.now_iso())
     if "source_url" in form:
         fields["source_url"] = safe_url(str(form["source_url"]))
     if "year" in form:
@@ -952,6 +994,21 @@ async def rewrite_script(request: Request, episode_id: str):
     return _done(episode_id, "rewriting")
 
 
+@app.post("/episode/{episode_id}/citations")
+def refresh_citations_route(request: Request, episode_id: str):
+    """Look the count up again. Counts go up over time, and a paper that had no
+    OpenAlex record when it was ingested may have one now."""
+    require_admin(request)
+    if not db.get_episode(episode_id):
+        raise HTTPException(404, "no such episode")
+    # Explicit button, so it overrides a hand-entered number -- unlike the
+    # automatic lookup during extraction, which leaves one alone.
+    found = ingest.refresh_citations(episode_id, CFG, force=True)
+    return RedirectResponse(
+        f"/episode/{episode_id}?done={'cited' if found is not None else 'nocite'}"
+        "#citations", status_code=303)
+
+
 @app.post("/episode/{episode_id}/script/revert")
 def revert_script(request: Request, episode_id: str):
     """Undo the last rewrite. One step back is enough to escape a bad edit."""
@@ -981,21 +1038,68 @@ def terms(request: Request):
 
 
 @app.get("/", response_class=HTMLResponse)
-def library(request: Request):
-    return _render_library(request, admin_mode=False)
+def library(request: Request, category: str = "", sort: str = ""):
+    return _render_library(request, admin_mode=False, category=category, sort=sort)
+
+
+# key -> (label, sort key, reverse). Order is the order the control offers them.
+SORTS: dict[str, tuple] = {
+    "created": ("Newest episodes", lambda e: (e["created_at"] or "", e["id"]), True),
+    "published": ("Paper date", lambda e: (e["year"] or 0, e["created_at"] or ""), True),
+    "cited": ("Most cited", lambda e: (e["cited_by"] if e["cited_by"] is not None else -1,
+                                       e["year"] or 0), True),
+}
+DEFAULT_SORT = "created"
+
+
+def _sorted_episodes(episodes: list[dict], sort: str) -> list[dict]:
+    """Sorting is stable on a secondary key, so equal values keep a sensible
+    order instead of shuffling between requests. Papers with no citation count
+    sort last under "most cited" rather than mixing in among the zeroes:
+    unknown and zero are different facts."""
+    _, key, rev = SORTS.get(sort, SORTS[DEFAULT_SORT])
+    return sorted(episodes, key=key, reverse=rev)
+
+
+def _category_chips(episodes: list[dict], selected: str) -> list[dict]:
+    """The filter row: only tags that actually have episodes behind them.
+
+    An empty category is a dead end -- showing it invites a click that lands on
+    "nothing here". Counts come from the same list being rendered, so the
+    numbers can never disagree with the page.
+    """
+    counts: dict[str, int] = {}
+    for ep in episodes:
+        for slug in ep["categories"]:
+            counts[slug] = counts.get(slug, 0) + 1
+    chips = [{"slug": "", "label": "All", "count": len(episodes),
+              "selected": not selected}]
+    for c in categories(CFG):
+        if counts.get(c["slug"]):
+            chips.append({**c, "count": counts[c["slug"]],
+                          "selected": c["slug"] == selected})
+    # A row with only "All" in it is chrome, not navigation.
+    return chips if len(chips) > 1 else []
 
 
 def _render_library(request: Request, admin_mode: bool, error: str = "",
-                    deleted: bool = False):
+                    deleted: bool = False, category: str = "", sort: str = ""):
     all_episodes = [
         _episode_view(r) for r in db.list_episodes(published_only=not admin_mode)
     ]
+    known = {c["slug"] for c in categories(CFG)}
+    category = category if category in known else ""
     # Failures are moved out of the reading list: they are maintenance, not
     # something to browse. They stay reachable, collapsed, below the fold.
     episodes = [e for e in all_episodes if e["status"] != "failed"]
     failed = ([{**e, "short_error": _short_error(e["error"])}
                for e in all_episodes if e["status"] == "failed"]
               if admin_mode else [])
+    chips = _category_chips(episodes, category)
+    if category:
+        episodes = [e for e in episodes if category in e["categories"]]
+    sort = sort if sort in SORTS else DEFAULT_SORT
+    episodes = _sorted_episodes(episodes, sort)
     return templates.TemplateResponse(
         request,
         "library.html",
@@ -1009,6 +1113,11 @@ def _render_library(request: Request, admin_mode: bool, error: str = "",
                       or e["status"] == "queued"],
             "workers": worker_count(),
             "deleted": deleted,
+            "chips": chips,
+            "category": category,
+            "category_label": category_labels(CFG).get(category, ""),
+            "sort": sort,
+            "sorts": [{"key": k, "label": v[0]} for k, v in SORTS.items()],
             "error": error,
             "total_cost": sum(e["cost_usd"] for e in all_episodes),
             "feed_url": CFG["server"]["base_url"].rstrip("/") + "/feed.xml",
@@ -1079,6 +1188,7 @@ def episode_page(request: Request, episode_id: str, done: str = ""):
             "publish_blocker": publish_blocker(row) if admin_mode else None,
             "tts_choices": tts_choices(),
             "script_choices": script_choices(),
+            "all_categories": categories(CFG),
             "versions": versions,
         },
     )

@@ -1066,3 +1066,111 @@ def test_shipped_prices_cover_every_model_the_config_can_use():
     used.add(cfg["script"]["fallback_model"])
     missing = sorted(m for m in used if m not in cfg["costs"])
     assert not missing, f"unpriced: {missing}"
+
+
+# ------------------------------------------------------------- citation counts
+
+def test_doi_normalization_rejects_things_that_are_not_dois():
+    from pipeline.citations import normalize_doi
+
+    good = "10.1257/aer.90.5.1397"
+    for raw in (good, f"https://doi.org/{good}", f"doi: {good}",
+                f"  https://dx.doi.org/{good}.  ", f"DOI:{good}"):
+        assert normalize_doi(raw) == good, raw
+    # Real DOIs get strange. This one is a live Wiley DOI.
+    gnarly = "10.1002/(SICI)1097-0258(19980815)17:15<1661::AID-SIM968>3.0.CO;2-2"
+    assert normalize_doi(gnarly) == gnarly
+
+    for bad in (None, "", "n/a", "see the paper", "10.1257", "arXiv:2103.00020"):
+        assert normalize_doi(bad) is None, bad
+
+    # The suffix is interpolated into a URL path we build, so it must not be
+    # able to carry path traversal or a query separator into one.
+    for hostile in ("10.1234/../../etc/passwd", "10.1234/x?a=b", "10.1234/x#y",
+                    "10.1234/x y", "10.1234/."):
+        assert normalize_doi(hostile) is None, hostile
+
+
+def test_a_title_near_miss_is_not_accepted(monkeypatch):
+    """A plausible wrong paper is worse than no number: it would attach someone
+    else's citation count and then sort the site by it."""
+    from pipeline import citations
+
+    monkeypatch.setattr(citations, "_get", lambda url, cfg: {
+        "results": [{"display_name": "Minimum Wages and Employment in Ohio",
+                     "cited_by_count": 999}]})
+    assert citations.lookup(None, "Minimum Wages and Employment", {}) is None
+
+    monkeypatch.setattr(citations, "_get", lambda url, cfg: {
+        "results": [{"display_name": "minimum wages and employment!",
+                     "cited_by_count": 4242}]})
+    # Same letters and digits, different punctuation and case: that is a match.
+    assert citations.lookup(None, "Minimum Wages and Employment", {}) == (4242, "openalex")
+
+
+def test_doi_lookup_is_preferred_and_exact(monkeypatch):
+    from pipeline import citations
+
+    seen = []
+
+    def fake_get(url, cfg):
+        seen.append(url)
+        return {"cited_by_count": 31337, "display_name": "Whatever"}
+
+    monkeypatch.setattr(citations, "_get", fake_get)
+    assert citations.lookup("10.1257/aer.90.5.1397", "A Title", {}) == (31337, "openalex")
+    assert seen == ["https://api.openalex.org/works/doi:10.1257/aer.90.5.1397"]
+
+
+def test_a_failed_lookup_returns_nothing_rather_than_raising(monkeypatch):
+    from pipeline import citations
+
+    monkeypatch.setattr(citations, "_get", lambda url, cfg: None)
+    assert citations.lookup("10.1257/aer.90.5.1397", "A Title", {}) is None
+    assert citations.lookup(None, None, {}) is None
+
+
+def test_a_lookup_failure_never_touches_the_episode(_isolated_db, monkeypatch):
+    """An unreachable third party is not a reason to lose a podcast, or to
+    overwrite a count somebody typed in by hand."""
+    import db
+    from pipeline import citations, ingest
+
+    db.create_episode("ECITE", "/tmp/c.pdf", "sha-cite")
+    db.update_episode("ECITE", title="A Paper", cited_by=12,
+                      cited_by_source="entered by hand")
+
+    monkeypatch.setattr(citations, "lookup",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    assert ingest.refresh_citations("ECITE", {}) is None
+    assert db.get_episode("ECITE")["cited_by"] == 12
+
+    monkeypatch.setattr(citations, "lookup", lambda *a, **k: None)
+    assert ingest.refresh_citations("ECITE", {}) is None
+    assert db.get_episode("ECITE")["cited_by"] == 12, "a miss must not clear it"
+
+    # A hand-entered number survives an automatic lookup: somebody typed it
+    # because the automatic route did not work, and re-running a stage must not
+    # quietly undo that.
+    monkeypatch.setattr(citations, "lookup", lambda *a, **k: (500, "openalex"))
+    assert ingest.refresh_citations("ECITE", {}) is None
+    assert db.get_episode("ECITE")["cited_by"] == 12
+
+    # The explicit button says otherwise.
+    assert ingest.refresh_citations("ECITE", {}, force=True) == 500
+    assert db.get_episode("ECITE")["cited_by"] == 500
+
+    # A looked-up number carries no such protection.
+    monkeypatch.setattr(citations, "lookup", lambda *a, **k: (600, "openalex"))
+    assert ingest.refresh_citations("ECITE", {}) == 600
+
+
+def test_citations_can_be_switched_off(_isolated_db, monkeypatch):
+    import db
+    from pipeline import citations, ingest
+
+    db.create_episode("ECITE2", "/tmp/c.pdf", "sha-cite2")
+    called = []
+    monkeypatch.setattr(citations, "lookup", lambda *a, **k: called.append(1) or (9, "x"))
+    assert ingest.refresh_citations("ECITE2", {"citations": {"enabled": False}}) is None
+    assert not called

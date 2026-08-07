@@ -46,6 +46,50 @@ models = [
   "gemini-flash-latest",
 ]
 
+# Tags for browsing the library. Deliberately a fixed vocabulary rather than
+# free text: at this size typos and near-duplicates ("AI" / "ai" / "Machine
+# Learning") cost more than the flexibility is worth.
+#
+# An episode can carry several: a paper can be both History and Economics, and
+# forcing a single choice would hide it from one of the two filters someone
+# would look under.
+#
+# There is deliberately no "classic" tag. Sorting by citations does that job
+# better -- it is a measured quantity rather than a judgement call, and it
+# ranks rather than merely including.
+#
+# The slug is what is stored and what appears in URLs, so renaming a label is
+# free but changing a slug orphans the episodes already tagged with it.
+[[categories]]
+slug  = "ai"
+label = "AI"
+
+[[categories]]
+slug  = "economics"
+label = "Economics"
+
+[[categories]]
+slug  = "history"
+label = "History"
+
+[[categories]]
+slug  = "science"
+label = "Science"
+
+[[categories]]
+slug  = "policy"
+label = "Policy"
+
+# Citation counts come from OpenAlex, which is free and needs no key. They are
+# never asked of the language model: a citation count is not printed in the
+# paper, so a model has nothing to read it off and would supply a plausible
+# number instead -- which here would drive the public sort order.
+#
+# Lookup is by DOI where the paper printed one. Failures are silent and leave
+# the count unset; type it in by hand on the episode instead.
+[citations]
+enabled = true
+
 [tts]
 # Models offered in the upload picker, first one the default. Verify IDs
 # against /admin/models before adding — a wrong ID 404s every chunk.
