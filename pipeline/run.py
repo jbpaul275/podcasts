@@ -63,21 +63,25 @@ def run_episode(episode_id: str, cfg: dict, from_stage: str | None = None) -> No
 
     for stage_name, fn in STAGES[start_idx:]:
         db.update_episode(episode_id, status=stage_name, error=None)
+        db.set_progress(episode_id, stage_name)
         db.stage_start(episode_id, stage_name)
         try:
             fn(episode_id, cfg)
         except PipelineError as e:
             db.stage_end(episode_id, stage_name, ok=False, detail=str(e))
             db.update_episode(episode_id, status="failed", error=str(e))
+            db.set_progress(episode_id, None)
             log.error("episode %s failed at %s: %s", episode_id, stage_name, e)
             return
         except Exception as e:
             detail = f"{e}\n{traceback.format_exc()[-1500:]}"
             db.stage_end(episode_id, stage_name, ok=False, detail=detail)
             db.update_episode(episode_id, status="failed", error=str(e))
+            db.set_progress(episode_id, None)
             log.exception("episode %s crashed at %s", episode_id, stage_name)
             return
         db.stage_end(episode_id, stage_name, ok=True)
 
+    db.set_progress(episode_id, None)
     db.update_episode(episode_id, status="done")
     log.info("episode %s done", episode_id)

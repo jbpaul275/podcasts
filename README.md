@@ -37,6 +37,10 @@ Open <http://localhost:8000>. Drop a PDF on the page, or copy one into `data/inb
 
 The episode page shows the player, the full script with per-speaker styling, the stage log, and the accumulated API cost. Failed runs can be re-run from any named stage.
 
+### Is it stuck, or just slow?
+
+A running episode shows what it is doing (`synthesizing chunk 3 of 12`) and how long it has been doing it, on both the episode page and the admin queue. TTS is the long stage: chunks land every minute or two, so the timestamp is the signal, not the stage name. Past 15 minutes with no movement the line turns red and reads *stalled* — retry the stage from the episode page, which keeps every chunk already on disk and re-synthesizes only what is missing.
+
 ### Citation flags
 
 The script prompt forbids fabricated citations, but models fabricate anyway. After generation, the script is regex-scanned for citation-shaped strings — `Name (Year)`, `et al.`, and proper nouns sitting near a bare four-digit year — and every hit is surfaced on the episode page, both as a summary box and inline on the offending line.
@@ -87,7 +91,17 @@ All knobs live in `config.toml`, loaded once at startup.
   - `grounding` — let the script model search the web. Off by default; see below.
   - `fallback_model` — used if the script model has no quota, rather than failing the episode. The substitution is recorded in the stage log and shown on the episode.
 - `[audio]` — `seam_silence_ms` is the main quality tell. It ships at 250ms; try 150 and 400 and pick by ear.
-- `[server]` — `base_url` (see Tailscale above) and `port`.
+- `[server]` — `base_url` (see Tailscale above), `port`, and `workers`.
+  - `workers` is how many episodes process at once. The pipeline spends nearly
+    all its wall-clock waiting on Gemini, so extra workers cost almost no CPU.
+    The real ceilings are the account's requests-per-minute and disk headroom
+    during assembly, which briefly needs ~2× an episode's chunk audio. Ships at
+    2; override per-deployment with `PAPERPOD_WORKERS` rather than editing the
+    file. Raise it a step at a time and watch for 429s in the logs.
+- `[retry]` — `request_timeout_s` is the ceiling on a single API call. Without
+  one, a stalled connection blocks its worker indefinitely: the episode sits in
+  `synthesizing` with no error and nothing behind it starts. Timeouts count as
+  retryable, so one bad connection costs a retry rather than the chunk.
 - `[costs]` — per-model token prices used to compute the per-episode cost shown in the UI.
 
 Prompts live in `prompts/` as plain Markdown, loaded at call time rather than baked into Python. `script_system.md` is the main quality lever — edit it freely without touching code.

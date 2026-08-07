@@ -137,6 +137,12 @@ main.wide { max-width: 62rem; }
    without this they push the page wider than the viewport on phones. */
 .error { color: var(--err); font-size: 0.88rem; margin: 0.6rem 0 0; overflow-wrap: anywhere; }
 
+/* what a running episode is doing right now */
+.progress { color: var(--muted); font-size: 0.88rem; margin: 0.6rem 0 0; }
+.progress.bad { color: var(--err); }
+.qprogress { display: block; color: var(--muted); font-size: 0.78rem; margin-top: 0.15rem; }
+.qprogress.bad { color: var(--err); }
+
 .status { text-transform: uppercase; letter-spacing: 0.04em; font-size: 0.7rem; font-weight: 650; padding: 0.15rem 0.45rem; border-radius: 999px; background: #eef0f4; color: var(--muted); }
 .status-done { background: #e7f4ec; color: #1a7f45; }
 .status-failed { background: #fdecea; color: var(--err); }

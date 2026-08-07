@@ -92,11 +92,17 @@
           <li>
             <a href="/episode/{{ ep.id }}">{{ ep.title }}</a>
             <span class="status status-{{ ep.status }}">{{ ep.status }}</span>
+            {% if ep.progress %}
+              <span class="qprogress{% if ep.progress.stalled %} bad{% endif %}">
+                {{ ep.progress.note }}
+                {%- if ep.progress.stalled %} · stalled {{ ep.progress.idle }}{% endif %}
+              </span>
+            {% endif %}
           </li>
         {% endfor %}
       </ol>
-      <p class="hint">One episode is processed at a time. Uploading while one is
-        running is fine — it queues behind.</p>
+      <p class="hint">{{ workers }} episode{{ '' if workers == 1 else 's' }}
+        processed at a time. Uploading more is fine — they queue behind.</p>
     {% else %}
       <p class="hint">Nothing processing.</p>
     {% endif %}
