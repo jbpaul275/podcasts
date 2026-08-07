@@ -26,6 +26,7 @@ from pipeline import tts as _tts_module  # noqa: E402
 
 _ORIGINAL_SYNTH_CHUNK = _tts_module._synthesize_chunk
 
+from pipeline import gemini as gemini_mod  # noqa: E402
 from pipeline import intro as intro_mod  # noqa: E402
 
 # The stub intro is deliberately a different length from the stub chunks, so a
@@ -115,6 +116,7 @@ def env(tmp_path, monkeypatch):
         except queue.Empty:
             break
 
+    gemini_mod.THROTTLE.reset()
     monkeypatch.setattr(ingest, "PAPERS_DIR", papers)
     monkeypatch.setattr(script_mod, "PAPERS_DIR", papers)
     monkeypatch.setattr(tts, "CHUNKS_DIR", chunks)
@@ -179,7 +181,10 @@ def env(tmp_path, monkeypatch):
         "voices": {"host_a": "Puck", "host_b": "Kore"},
         "script": {"target_words": 1600, "max_pages": 120,
                    "models": ["s", "s2"]},
-        "tts": {"chunk_target_words": 60, "chunk_max_words": 120, "context_turns": 2},
+        # retry_pass_delay_s 0: the second pass over failed chunks still runs,
+        # it just does not sit out its cooldown first.
+        "tts": {"chunk_target_words": 60, "chunk_max_words": 120, "context_turns": 2,
+                "retry_pass_delay_s": 0},
         "audio": {"seam_silence_ms": 250, "lufs_target": -16.0, "true_peak": -1.5,
                   "lra": 11.0, "bitrate": "96k"},
         "server": {"base_url": "http://paperpod.test:8000", "port": 8000},

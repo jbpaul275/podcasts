@@ -135,6 +135,16 @@ chunk_target_words = 250
 chunk_max_words    = 320
 # How many preceding turns to include as (unspoken) context for prosody.
 context_turns      = 2
+# After the first pass, wait this long and retry the chunks that failed.
+#
+# Nearly every chunk failure is a rate limit, and a chunk gives up within
+# seconds of hitting one -- so a minute later the same call usually just works.
+# Without this pass the episode assembles with holes in it and waits for
+# somebody to notice and press retry.
+#
+# 0 retries immediately (useful in tests); a negative value disables the second
+# pass entirely.
+retry_pass_delay_s = 60
 
 [retry]
 # Transient API failures (429 rate limits, 5xx) are retried on the server's

@@ -49,6 +49,18 @@ No text anywhere reads as a scan and says to OCR it. A little text but not enoug
 
 A running episode shows what it is doing (`synthesizing chunk 3 of 12`) and how long it has been doing it, on both the episode page and the admin queue. TTS is the long stage: chunks land every minute or two, so the timestamp is the signal, not the stage name. Past 15 minutes with no movement the line turns red and reads *stalled* — retry the stage from the episode page, which keeps every chunk already on disk and re-synthesizes only what is missing.
 
+### When chunks fail
+
+A chunk that cannot be synthesized becomes a logged gap rather than sinking the episode — the rest assembles and the episode page says which chunks are missing and **why**. The reason matters: which chunks died is the symptom, and on its own it sends you to the process log to find the cause. Identical reasons are grouped, because eight copies of one sentence hide that it is one problem.
+
+Nearly every failure here is a rate limit, and rate limits are a fact about the account rather than about one request. Three things follow from that:
+
+- **A 429 holds back every other call.** When the server names a retry window, `gemini.THROTTLE` closes it for the whole process — both workers, every remaining chunk. Without this, each chunk discovered the closed window separately: one gives up, the next starts with a fresh retry budget and no idea the API just said slow down, and sprints back into the same wall. That is how one rate limit becomes a contiguous tail of failed chunks. The thread that *got* the 429 backs off on its own schedule and is exempt, so nothing waits twice for one window.
+- **Failed chunks get a second pass.** After the first pass the stage waits `[tts] retry_pass_delay_s` (60s) and retries just the ones that failed. A chunk gives up within seconds of hitting a limit; a minute later the same call usually works. Set it to 0 to retry immediately, or negative to disable the pass.
+- **A dropped connection is retried.** Transport failures arrive with no HTTP status, so a retry check that keys on the status code classified the *most* transient failure there is as permanent and burned the chunk on its first attempt. `is_transport_error` catches those by exception type and message — but only when no status is present, so a real 400 is never talked out of being a 400.
+
+Retrying the stage by hand is still there and still cheap: chunks already on disk are skipped, so you only pay for the holes.
+
 ### Rewriting a script
 
 An episode with a script has a **Rewrite the script** panel. Two buttons:
@@ -194,6 +206,8 @@ All knobs live in `config.toml`, loaded once at startup.
   one, a stalled connection blocks its worker indefinitely: the episode sits in
   `synthesizing` with no error and nothing behind it starts. Timeouts count as
   retryable, so one bad connection costs a retry rather than the chunk.
+  `max_delay_s` also caps how long a server-named rate-limit window can hold
+  the whole process, so an absurd `retryDelay` cannot wedge a worker.
 - `[site]` — `owner_name` and `contact_email` (shown on the terms page, and used as the podcast owner contact in the feed), plus `analytics_id`.
   - `analytics_id` is a Google Analytics measurement ID. **Empty disables it entirely** — no script tag, no request to Google — and the terms page changes to match. It is never loaded for a signed-in admin, so editing the library does not turn up in the numbers as reader traffic.
 - `[costs]` — per-model token prices used to compute the per-episode cost shown in the UI.

@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 
 import db
@@ -36,6 +37,59 @@ RETRYABLE_CODES = {408, 429, 500, 502, 503, 504}
 
 # Warn once per model rather than on every chunk.
 _UNPRICED_WARNED: set[str] = set()
+
+
+class _Throttle:
+    """A rate limit is a fact about the account, not about one request.
+
+    Without this, each call discovers a closed quota window on its own: chunk 3
+    exhausts its retries, chunk 4 starts with a fresh budget and no idea the
+    API just said "slow down", and sprints straight back into the same wall.
+    That is how one 429 turns into a contiguous tail of failed chunks.
+
+    Process-global on purpose. Both workers draw on one account, so a limit hit
+    by one episode applies to the other.
+    """
+
+    def __init__(self) -> None:
+        self._until = 0.0
+        self._lock = threading.Lock()
+        # The thread that got the 429 backs off on its own schedule in the
+        # retry loop below. Without this it would wait twice for one window:
+        # once in its backoff and again here.
+        self._own = threading.local()
+
+    def hold(self, seconds: float) -> None:
+        """Close the window for at least this long."""
+        if seconds <= 0:
+            return
+        with self._lock:
+            self._until = max(self._until, time.monotonic() + seconds)
+            self._own.until = self._until
+
+    def remaining(self) -> float:
+        with self._lock:
+            if getattr(self._own, "until", 0.0) >= self._until:
+                return 0.0     # this thread is already serving the sentence
+            return max(0.0, self._until - time.monotonic())
+
+    def wait(self, label: str = "request") -> None:
+        """Block until the window reopens. Waiting here is the point: the
+        alternative is spending a retry to be told the same thing."""
+        left = self.remaining()
+        if left <= 0:
+            return
+        log.info("%s waiting %.1fs for the rate-limit window to reopen",
+                 label, left)
+        time.sleep(left)
+
+    def reset(self) -> None:
+        with self._lock:
+            self._until = 0.0
+            self._own.until = 0.0
+
+
+THROTTLE = _Throttle()
 
 
 def client():
@@ -108,10 +162,39 @@ def is_timeout(exc) -> bool:
     return "timeout" in type(exc).__name__.casefold()
 
 
+# Substrings that mark a connection that broke rather than a request that was
+# refused. Matched against the exception's type name and message because the
+# SDK surfaces these from several transport layers (httpx, httpcore, ssl,
+# socket) with no common base class and no `code`.
+_TRANSPORT_MARKERS = (
+    "connection", "connect", "disconnected", "protocol", "ssl", "handshake",
+    "reset by peer", "broken pipe", "incomplete read", "socket", "eof occurred",
+)
+
+
+def is_transport_error(exc) -> bool:
+    """The connection failed before the server had its say.
+
+    These carry no HTTP status, so a check that keys on `code` calls them
+    permanent and burns the chunk on the first attempt -- the exact opposite of
+    the truth, since a dropped connection is the most transient failure there
+    is. Requires the absence of a code: once the server answered, its status is
+    the authority and this must not second-guess it.
+
+    Retrying does risk paying twice for a call whose response was lost in
+    flight. That is already true of timeouts, and a chunk that has to be
+    re-synthesized later costs the same either way.
+    """
+    if getattr(exc, "code", None) is not None:
+        return False
+    blob = (type(exc).__name__ + " " + str(exc)).casefold()
+    return any(m in blob for m in _TRANSPORT_MARKERS)
+
+
 def is_retryable(exc) -> bool:
     # A timeout is the most transient failure there is -- one stalled
     # connection should cost a retry, not the whole chunk.
-    if is_timeout(exc):
+    if is_timeout(exc) or is_transport_error(exc):
         return True
     code = getattr(exc, "code", None)
     return isinstance(code, int) and code in RETRYABLE_CODES
@@ -131,6 +214,10 @@ def call_with_retry(fn, cfg: dict, model: str, label: str = "request",
 
     last: Exception | None = None
     for attempt in range(attempts):
+        # Somebody else's 429 is this call's problem too -- one account, one
+        # quota. Waiting costs the same wall-clock as the failure would, and
+        # keeps the attempt.
+        THROTTLE.wait(label)
         try:
             return fn()
         except extra_retryable as e:
@@ -158,6 +245,11 @@ def call_with_retry(fn, cfg: dict, model: str, label: str = "request",
             delay = retry_delay(e)
             if delay is None:
                 delay = base * (2 ** attempt)
+            elif getattr(e, "code", None) == 429:
+                # The server named a window. Hold every other call off until it
+                # reopens, so the rest of the script does not spend its retries
+                # finding out the same thing one at a time.
+                THROTTLE.hold(min(delay, max_delay))
 
         if attempt == attempts - 1:
             break

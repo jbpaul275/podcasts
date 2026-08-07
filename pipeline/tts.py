@@ -18,6 +18,7 @@ and retrying resumes where it left off.
 import json
 import logging
 import re
+import time
 import wave
 
 import db
@@ -93,11 +94,53 @@ def synthesize(episode_id: str, cfg: dict) -> None:
         json.dumps(manifest, indent=2), encoding="utf-8"
     )
 
+    reasons: dict[int, str] = {}
+    failed = _synthesize_pass(episode_id, manifest, out_dir, cfg,
+                              [e["seq"] for e in manifest], reasons)
+
+    # A second pass, after a cooldown. Nearly every chunk that fails here fails
+    # to a rate limit, and the first pass gives up on a chunk within seconds of
+    # hitting one -- so a minute later the same call usually just works. Doing
+    # this inside the stage means the episode assembles complete rather than
+    # needing somebody to notice the gap and press retry.
+    delay = float(tcfg.get("retry_pass_delay_s", 60))
+    if failed and delay >= 0:
+        db.set_progress(
+            episode_id,
+            f"waiting {int(delay)}s to retry {len(failed)} failed chunk"
+            f"{'' if len(failed) == 1 else 's'}",
+        )
+        log.warning("%d chunk(s) failed; retrying them in %.0fs", len(failed), delay)
+        time.sleep(delay)
+        failed = _synthesize_pass(episode_id, manifest, out_dir, cfg, failed, reasons)
+
+    if failed:
+        if len(failed) == len(manifest):
+            # Carry the underlying reason: "every chunk failed" on its own sends
+            # you to the logs to find out what is actually wrong.
+            raise PipelineError(
+                f"every TTS chunk failed using {model_for(episode_id, cfg)}; "
+                f"nothing to assemble. {_why(failed, reasons)}"
+            )
+        # Partial failure: assemble the rest with a logged gap rather than
+        # failing the whole episode. The reason travels with the gap -- which
+        # chunks are missing is the symptom, and on its own it sends you to the
+        # process log to find out what actually went wrong.
+        db.stage_start(episode_id, "synthesizing:gaps")
+        db.stage_end(
+            episode_id, "synthesizing:gaps", ok=False,
+            detail=(f"chunks failed and will be gaps in the final audio: "
+                    f"{failed}. {_why(failed, reasons)}"),
+        )
+
+
+def _synthesize_pass(episode_id: str, manifest: list[dict], out_dir, cfg: dict,
+                     seqs: list[int], reasons: dict[int, str]) -> list[int]:
+    """Synthesize the named chunks; return the ones that still failed."""
     failed = []
-    last_error: Exception | None = None
     total = len(manifest)
-    for entry in manifest:
-        seq = entry["seq"]
+    for seq in seqs:
+        entry = manifest[seq]
         wav_path = out_dir / f"{seq:03d}.wav"
         if wav_path.exists() and wav_path.stat().st_size > 44:
             log.info("chunk %03d already synthesized, skipping", seq)
@@ -107,6 +150,7 @@ def synthesize(episode_id: str, cfg: dict) -> None:
         db.set_progress(episode_id, f"synthesizing chunk {seq + 1} of {total}")
         try:
             _synthesize_chunk(episode_id, entry, wav_path, cfg)
+            reasons.pop(seq, None)   # it came good on a later pass
         except ModelUnusable:
             # No quota, or the model is retired. Every remaining chunk would
             # fail identically, so stop on the first rather than grinding
@@ -115,24 +159,26 @@ def synthesize(episode_id: str, cfg: dict) -> None:
         except Exception as e:
             log.error("chunk %03d failed, giving up on it: %s", seq, e)
             failed.append(seq)
-            last_error = e
+            reasons[seq] = f"{type(e).__name__}: {e}"
+    return failed
 
-    if failed:
-        if len(failed) == len(manifest):
-            # Carry the underlying reason: "every chunk failed" on its own sends
-            # you to the logs to find out what is actually wrong.
-            detail = str(last_error or "no error recorded")
-            raise PipelineError(
-                f"every TTS chunk failed using {model_for(episode_id, cfg)}; "
-                f"nothing to assemble. Last error: {detail[:400]}"
-            )
-        # Partial failure: assemble the rest with a logged gap rather than
-        # failing the whole episode.
-        db.stage_start(episode_id, "synthesizing:gaps")
-        db.stage_end(
-            episode_id, "synthesizing:gaps", ok=False,
-            detail=f"chunks failed and will be gaps in the final audio: {failed}",
-        )
+
+def _why(failed: list[int], reasons: dict[int, str]) -> str:
+    """The distinct reasons the failed chunks gave, commonest first.
+
+    Grouped rather than listed per chunk: when eight chunks die to one rate
+    limit, eight copies of the same sentence hide that it is one problem.
+    """
+    counts: dict[str, int] = {}
+    for seq in failed:
+        why = reasons.get(seq)
+        if why:
+            counts[why[:300]] = counts.get(why[:300], 0) + 1
+    if not counts:
+        return "No error was recorded, which is itself a bug — check the logs."
+    parts = [f"{why} ({n} chunk{'' if n == 1 else 's'})" if len(counts) > 1 else why
+             for why, n in sorted(counts.items(), key=lambda kv: -kv[1])]
+    return "Reason: " + "; ".join(parts)
 
 
 def _build_prompt(entry: dict, cfg: dict) -> str:
