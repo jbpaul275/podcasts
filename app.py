@@ -158,6 +158,20 @@ _INFLIGHT: set[str] = set()
 _INFLIGHT_LOCK = threading.Lock()
 
 
+def build_stamp() -> str:
+    """When the running image was built, or "dev" outside a container.
+
+    A stale deploy is the failure mode with no symptom of its own: a fixed bug
+    reads as unfixed and a config change reads as ignored, and the only way to
+    tell is to notice that an error message is worded the way it was two
+    releases ago. Written by the Dockerfile after the source is copied in.
+    """
+    try:
+        return (ROOT / "BUILD_STAMP").read_text(encoding="utf-8").strip() or "dev"
+    except OSError:
+        return "dev"
+
+
 def worker_count() -> int:
     """How many episodes to process at once.
 
@@ -1174,6 +1188,7 @@ def _render_library(request: Request, admin_mode: bool, error: str = "",
             "visibility_label": VISIBILITY.get(visibility, ("",))[0],
             "error": error,
             "total_cost": sum(e["cost_usd"] for e in all_episodes),
+            "build": build_stamp(),
             "feed_url": CFG["server"]["base_url"].rstrip("/") + "/feed.xml",
             "feed_title": CFG.get("feed", {}).get("title", "Paperpod"),
             "feed_description": CFG.get("feed", {}).get("description", ""),
@@ -1361,6 +1376,7 @@ def health(request: Request):
             default=None,
         ),
         "in_flight": sorted(_INFLIGHT),
+        "build": build_stamp(),
         "episodes": {
             "total": len(db.list_episodes()),
             "done": sum(1 for r in db.list_episodes() if r["status"] == "done"),
