@@ -59,6 +59,7 @@ from pipeline import (
     intro as intro_mod,
     run,
     script as script_mod,
+    tts as tts_mod,
 )
 from prose import author_credit as _author_credit, decaps as _decaps
 
@@ -1466,14 +1467,51 @@ def feed_readiness() -> list[dict]:
     return out
 
 
+def _disclosure_backfill() -> dict:
+    """Episodes whose audio does not carry the current spoken disclosure,
+    split by what re-running synthesis would actually cost.
+
+    An episode with all its chunk WAVs re-synthesizes only the intro — one
+    short call, a fraction of a cent. One whose chunks are gone pays for the
+    entire script again, which for a library this size is real money. They
+    look identical from the outside, so they are counted separately and only
+    the cheap ones are ever queued.
+    """
+    ready, expensive = [], []
+    if not intro_mod.enabled(CFG):
+        return {"ready": ready, "expensive": expensive}
+    for row in db.list_episodes():
+        if row["status"] != "done" or not row["audio_path"]:
+            continue
+        if intro_mod.recorded_text(row["id"]) == intro_mod.intro_text(row, CFG):
+            continue
+        present, expected = tts_mod.chunks_on_disk(row["id"])
+        target = ready if (expected and present >= expected) else expensive
+        target.append({"id": row["id"],
+                       "title": row["episode_title"] or row["title"] or row["id"],
+                       "present": present, "expected": expected})
+    return {"ready": ready, "expensive": expensive}
+
+
+@app.post("/admin/disclosure")
+def admin_backfill_disclosure(request: Request):
+    require_admin(request)
+    ready = _disclosure_backfill()["ready"]
+    for ep in ready:
+        enqueue(ep["id"], from_stage="synthesizing")
+    return RedirectResponse(f"/admin/feed?queued={len(ready)}", status_code=303)
+
+
 @app.get("/admin/feed", response_class=HTMLResponse)
-def admin_feed(request: Request):
+def admin_feed(request: Request, queued: int = 0):
     if not auth.is_admin(request):
         return RedirectResponse("/admin/login", status_code=303)
     checks = feed_readiness()
     return templates.TemplateResponse(
         request, "feedcheck.html",
         {"admin": True, "signed_in": True, "checks": checks,
+         "backfill": _disclosure_backfill(),
+         "queued": queued,
          "blockers": [c for c in checks if c["ok"] is False],
          "feed_url": CFG["server"]["base_url"].rstrip("/") + "/feed.xml",
          "feed_title": CFG.get("feed", {}).get("title", "Paperpod")},

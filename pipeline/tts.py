@@ -135,6 +135,28 @@ def synthesize(episode_id: str, cfg: dict) -> None:
         )
 
 
+def chunks_on_disk(episode_id: str) -> tuple[int, int]:
+    """(WAVs present, chunks the manifest expected).
+
+    What it costs to re-run this stage. A chunk whose WAV is on disk is
+    skipped, so an episode with a complete set re-synthesizes nothing —
+    but one whose chunks are gone pays for the whole script again. Anything
+    that re-runs synthesis in bulk needs to be able to tell those apart
+    before spending money on the difference.
+    """
+    out_dir = CHUNKS_DIR / episode_id
+    if not out_dir.is_dir():
+        return 0, 0
+    present = sum(1 for p in out_dir.glob("[0-9][0-9][0-9].wav")
+                  if p.stat().st_size > 44)
+    try:
+        manifest = json.loads((out_dir / "manifest.json").read_text(encoding="utf-8"))
+        expected = len(manifest) if isinstance(manifest, list) else 0
+    except (OSError, json.JSONDecodeError, TypeError):
+        expected = 0
+    return present, expected
+
+
 def _build_prompt(entry: dict, cfg: dict) -> str:
     lines = []
     lines.append(

@@ -145,7 +145,11 @@ The spoken one is `pipeline/intro.py`. Three things about it are deliberate:
 
 The rendered sentence is stored beside the WAV as `intro.txt`. Editing a paper's title or authors changes the sentence, and the episode page then says the audio announces the old wording — nothing in the audio itself would reveal that. Retrying from **synthesizing** re-records only the intro; the dialogue chunks on disk are reused.
 
-Episodes built before this existed have no intro and say so on their page. `[intro] enabled = false` switches the whole thing off, which is a directory-compliance decision rather than a style one.
+Episodes built before this existed have no intro and say so on their page. `/admin/feed` has a button that queues all of them at once.
+
+That button only queues episodes whose dialogue WAVs are still on disk, where re-running synthesis costs one short call. An episode whose chunks are gone would pay for its whole script again — a different order of money — so it is listed separately and left for you to retry deliberately. The two look identical from the outside, which is exactly why the distinction is made in code rather than left to whoever presses the button.
+
+`[intro] enabled = false` switches the whole thing off, which is a directory-compliance decision rather than a style one.
 
 The enclosure URL answers `HEAD` as well as `GET`. Both directories probe it before accepting a feed, and FastAPI's `@app.get` alone returns 405 — which reads to them as a broken media URL rather than a missing method.
 
