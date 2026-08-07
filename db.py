@@ -92,6 +92,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
                        ("grounding_json", "TEXT"),
                        ("published", "INTEGER DEFAULT 0"),
                        ("progress", "TEXT"),
+                       ("script_prev", "TEXT"),
+                       ("script_note", "TEXT"),
+                       ("script_updated_at", "TEXT"),
+                       ("rewrite_json", "TEXT"),
                        ("progress_at", "TEXT"),
                        ("flags_reviewed", "INTEGER DEFAULT 0")):
         if name not in cols:
@@ -167,6 +171,30 @@ def update_episode(id: str, **fields) -> None:
     cols = ", ".join(f"{k} = ?" for k in fields)
     conn.execute(f"UPDATE episode SET {cols} WHERE id = ?", (*fields.values(), id))
     conn.commit()
+
+
+def set_script(id: str, text: str, note: str | None = None) -> None:
+    """Store a new script, keeping the previous one for a one-step undo.
+
+    script_updated_at is what makes stale audio detectable: an episode whose
+    script is newer than its audio is playing words nobody approved.
+    """
+    row = get_episode(id)
+    prev = row["script_md"] if row else None
+    update_episode(id, script_md=text, script_note=note,
+                   script_updated_at=now_iso(),
+                   **({"script_prev": prev} if prev and prev != text else {}))
+
+
+def restore_script(id: str) -> bool:
+    """Swap the stored script back to the previous one. Returns False if there
+    is nothing to go back to."""
+    row = get_episode(id)
+    if not row or not (row["script_prev"] or "").strip():
+        return False
+    update_episode(id, script_md=row["script_prev"], script_prev=row["script_md"],
+                   script_note=None, script_updated_at=now_iso())
+    return True
 
 
 def set_progress(id: str, note: str | None) -> None:

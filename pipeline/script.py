@@ -155,33 +155,89 @@ def collect_grounding(resp) -> dict:
     return out
 
 
-def _script_models(cfg: dict) -> list[str]:
+def _script_models(cfg: dict, prefer: str | None = None) -> list[str]:
     """Preferred model, then the fallback. A preview Pro often returns
-    limit: 0, and degrading to Flash beats failing the episode outright."""
-    primary = cfg["models"]["script"]
+    limit: 0, and degrading to Flash beats failing the episode outright.
+
+    `prefer` overrides the configured primary — used when a rewrite names a
+    model explicitly. The fallback still applies, because a hand-picked model
+    is no less likely to be out of quota than the configured one.
+    """
+    primary = prefer or cfg["models"]["script"]
     fallback = (cfg.get("script", {}).get("fallback_model") or "").strip()
     return [primary, fallback] if fallback and fallback != primary else [primary]
 
 
-def generate_script(episode_id: str, cfg: dict) -> str:
-    pdf_path = PAPERS_DIR / f"{episode_id}.pdf"
-    if not pdf_path.exists():
-        raise PipelineError(f"missing source PDF {pdf_path}")
+def script_choices(cfg: dict) -> list[str]:
+    """Models offered for writing or rewriting a script, default first."""
+    listed = [m for m in cfg.get("script", {}).get("models", []) if m]
+    default = cfg["models"]["script"]
+    fallback = (cfg.get("script", {}).get("fallback_model") or "").strip()
+    out = [default] + [m for m in listed + [fallback] if m and m != default]
+    seen, uniq = set(), []
+    for m in out:
+        if m not in seen:
+            seen.add(m)
+            uniq.append(m)
+    return uniq
+
+
+def revise_script(episode_id: str, cfg: dict, instructions: str,
+                  model: str | None = None) -> str:
+    """Rewrite the stored script to an editor's notes, keeping the rest intact.
+
+    The paper goes along with it: a note asking for more on some part of the
+    paper cannot be satisfied from the script alone, and sending the PDF is
+    also what keeps the no-fabrication constraint enforceable.
+    """
+    ep = db.get_episode(episode_id)
+    if not ep or not (ep["script_md"] or "").strip():
+        raise PipelineError("no script to revise; run the scripting stage first")
+    if not instructions.strip():
+        raise PipelineError("no revision notes given")
 
     target = cfg["script"]["target_words"]
-    system = load_prompt("script_system.md")
-    if cfg.get("script", {}).get("grounding"):
-        system += "\n\n" + load_prompt("script_grounding.md")
+    user = (
+        load_prompt("script_revise.md")
+        .replace("$INSTRUCTIONS", instructions.strip())
+        .replace("$TARGET_WORDS", str(target))
+        .replace("$SCRIPT", ep["script_md"])
+    )
+    return _write_script(episode_id, cfg, user, model, label="script revision")
+
+
+def generate_script(episode_id: str, cfg: dict, instructions: str | None = None,
+                    model: str | None = None) -> str:
+    """Write a script from the paper, ignoring whatever script exists."""
+    target = cfg["script"]["target_words"]
     user = (
         load_prompt("script_user.md")
         .replace("$TARGET_WORDS", str(target))
         .replace("$MIN_WORDS", str(int(target * 0.875)))
         .replace("$MAX_WORDS", str(int(target * 1.125)))
     )
+    if instructions and instructions.strip():
+        user += (
+            "\n\nADDITIONAL DIRECTION FROM THE EDITOR — these take precedence "
+            "over the default emphasis, but not over the hard constraints:\n"
+            + instructions.strip()
+        )
+    return _write_script(episode_id, cfg, user, model, label="script generation")
+
+
+def _write_script(episode_id: str, cfg: dict, user: str, model: str | None,
+                  label: str) -> str:
+    pdf_path = PAPERS_DIR / f"{episode_id}.pdf"
+    if not pdf_path.exists():
+        raise PipelineError(f"missing source PDF {pdf_path}")
+
+    system = load_prompt("script_system.md")
+    if cfg.get("script", {}).get("grounding"):
+        system += "\n\n" + load_prompt("script_grounding.md")
     gen_cfg = _script_config(cfg, system)
     part = pdf_part(pdf_path)
 
-    candidates = _script_models(cfg)
+    candidates = _script_models(cfg, prefer=model)
     resp = None
     for i, model in enumerate(candidates):
         try:
@@ -189,7 +245,7 @@ def generate_script(episode_id: str, cfg: dict) -> str:
                 lambda m=model: client().models.generate_content(
                     model=m, contents=[part, user], config=gen_cfg
                 ),
-                cfg, model, label="script generation",
+                cfg, model, label=label,
             )
             break
         except ModelUnusable as e:
@@ -226,7 +282,7 @@ def generate_script(episode_id: str, cfg: dict) -> str:
             lambda: client().models.generate_content(
                 model=model, contents=[part, retry_msg], config=gen_cfg
             ),
-            cfg, model, label="script regeneration",
+            cfg, model, label=f"{label} (format retry)",
         )
         db.update_episode(episode_id, grounding_json=json.dumps(collect_grounding(resp)))
         record_cost(episode_id, model, resp, cfg, stage="script")
