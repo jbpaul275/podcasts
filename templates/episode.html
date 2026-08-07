@@ -9,6 +9,7 @@
     {%- if ep.year %}{{ ep.year }}{% endif %}{% if ep.venue %}{% if ep.year %} · {% endif %}{{ ep.venue }}{% endif %}
   </p>
   <p class="meta">
+    {% if ep.number %}<span class="epnum">Episode {{ ep.number }}</span>{% endif %}
     {% if admin %}<span class="status status-{{ ep.status }}">{{ ep.status_label or ep.status }}</span>{% endif %}
     {% if ep.has_audio %}<span>{{ ep.duration }}</span>{% endif %}
     {% for c in ep.category_labels %}<a class="tag" href="/?category={{ ep.categories[loop.index0] }}">{{ c }}</a>{% endfor %}

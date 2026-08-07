@@ -3344,3 +3344,109 @@ def test_a_failure_inside_the_pipeline_is_not_silently_restarted(env, tmp_path):
     with pytest.raises(DuplicateEpisode):
         ingest.ingest_pdf(pdf, env["cfg"])
     assert db.get_episode(episode_id)["status"] == "failed", "not requeued behind your back"
+
+
+def test_the_feed_carries_the_episode_number(client, env, tmp_path):
+    import db
+
+    eid = _live_episode(env, tmp_path, "numbered.pdf")
+    db.assign_episode_number(eid)
+
+    xml = client.get("/feed.xml").text
+    assert "<itunes:episode>1</itunes:episode>" in xml
+    assert f"Episode 1" in client.get(f"/episode/{eid}").text
+
+
+def test_an_unnumbered_episode_omits_the_tag_rather_than_sending_zero(client, env, tmp_path):
+    """Apple wants a non-zero integer, so a placeholder for episodes published
+    before numbering existed would be a validation failure."""
+    _live_episode(env, tmp_path, "old.pdf")
+
+    xml = client.get("/feed.xml").text
+    assert "<itunes:episode>" not in xml
+    assert "<item>" in xml, "the episode is still in the feed"
+
+
+def test_publishing_assigns_the_number(client, env, tmp_path):
+    import db
+
+    episode_id = _done_episode(env, tmp_path)
+    db.update_episode(episode_id, flags_reviewed=1)
+    assert db.get_episode(episode_id)["episode_number"] is None
+
+    client.post(f"/episode/{episode_id}/publish", data={"published": "1"},
+                follow_redirects=False)
+    assert db.get_episode(episode_id)["episode_number"] == 1
+
+    # Unpublishing keeps it.
+    client.post(f"/episode/{episode_id}/publish", data={"published": "0"},
+                follow_redirects=False)
+    assert db.get_episode(episode_id)["episode_number"] == 1
+
+
+def test_a_reaccepted_paper_surfaces_as_a_new_upload(client, env, tmp_path):
+    """The row is reused, so without re-dating it keeps the timestamp from when
+    it first bounced -- and created_at is what the library sorts on. A paper
+    you just added would appear wherever it sat days ago, which reads exactly
+    like it never arrived."""
+    import db
+    from pipeline import PipelineError, ingest
+
+    # An older paper, uploaded first and accepted.
+    older = tmp_path / "older.pdf"
+    _make_pdf(older)
+    older_id = ingest.ingest_pdf(older, env["cfg"])
+
+    # A big one, rejected under a tight limit.
+    big = tmp_path / "big.pdf"
+    _make_pdf(big, pages=8)
+    with pytest.raises(PipelineError):
+        ingest.ingest_pdf(big, {**env["cfg"],
+                                "script": {**env["cfg"]["script"], "max_pages": 3}})
+    big_id = db.find_by_sha(
+        __import__("hashlib").sha256(big.read_bytes()).hexdigest())["id"]
+    first_stamp = db.get_episode(big_id)["created_at"]
+
+    # Re-uploaded once the limit allows it.
+    assert ingest.ingest_pdf(big, env["cfg"]) == big_id
+    assert db.get_episode(big_id)["created_at"] >= first_stamp
+
+    # Newest-first, it is now above the paper uploaded before it.
+    body = client.get("/admin").text
+    assert body.index(big_id) < body.index(older_id), (
+        "a paper you just re-uploaded belongs at the top of the list"
+    )
+
+
+def test_a_failure_that_just_happened_is_not_hidden_in_a_shut_box(client, env, tmp_path):
+    """A failed episode leaves the main list for a collapsed disclosure. That
+    is right for last week's failure and wrong for one from ten minutes ago:
+    the episode you were watching simply disappears."""
+    import db
+
+    episode_id = _done_episode(env, tmp_path)
+    db.mark_failed(episode_id, "the model fell over")
+
+    body = client.get("/admin").text
+    assert '<details class="failures" open>' in body
+    assert "one just now" in body
+
+    # An old failure settles back down.
+    db.update_episode(episode_id, failed_at="2020-01-01T00:00:00+00:00")
+    body = client.get("/admin").text
+    assert '<details class="failures" open>' not in body
+    assert "1 failed" in body, "still reachable, just not shouting"
+
+
+def test_an_ingest_rejection_records_when_it_happened(env, tmp_path):
+    import db
+    from pipeline import PipelineError, ingest
+
+    pdf = tmp_path / "toolong.pdf"
+    _make_pdf(pdf, pages=8)
+    with pytest.raises(PipelineError):
+        ingest.ingest_pdf(pdf, {**env["cfg"],
+                                "script": {**env["cfg"]["script"], "max_pages": 2}})
+    assert db.list_episodes()[0]["failed_at"], (
+        "without a timestamp the library cannot tell a fresh failure from an old one"
+    )

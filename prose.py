@@ -36,6 +36,38 @@ def decaps(text: str) -> str:
     return " ".join(out)
 
 
+def _has_upper(word: str) -> bool:
+    return any(c.isupper() for c in word)
+
+
+def title_case(text: str) -> str:
+    """Title Case, applied conservatively.
+
+    Asking the model for a capitalization style gets you that style most of the
+    time, which is exactly the failure here: one title in sentence case next to
+    one in title case reads as sloppiness rather than variety. So the rule is
+    enforced after the fact instead of only requested.
+
+    Conservative in one specific way: a word that already contains a capital is
+    left completely alone. Blindly upper-casing first letters turns "iPhone"
+    into "IPhone" and "eBay" into "EBay", and those are exactly the words a
+    reader notices. Only all-lowercase words are touched, which can add
+    capitals but never move one.
+    """
+    words = text.split()
+    out = []
+    for i, word in enumerate(words):
+        last = i == len(words) - 1
+        core = word.strip(".,:;!?()[]'\"“”‘’").casefold()
+        if 0 < i and not last and core in SMALL_WORDS and not _has_upper(word):
+            out.append(word.casefold())
+        elif _has_upper(word):
+            out.append(word)          # iPhone, GDP, McKinsey — already right
+        else:
+            out.append(word[:1].upper() + word[1:])
+    return " ".join(out)
+
+
 def author_credit(authors: list[str], max_named: int = 3) -> str:
     if not authors:
         return "an uncredited author"

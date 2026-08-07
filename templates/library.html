@@ -71,6 +71,7 @@
     {% if ep.summary %}<p class="postsummary">{{ ep.summary }}</p>{% endif %}
 
     <p class="postmeta">
+      {% if ep.number %}<span class="epnum">#{{ ep.number }}</span>{% endif %}
       {% if ep.year %}<span>{{ ep.year }}</span>{% endif %}
       {% if ep.has_audio %}<span>{{ ep.duration }}</span>{% endif %}
       {% if ep.status != 'done' %}<span class="status status-{{ ep.status }}">{{ ep.status_label or ep.status }}</span>{% endif %}
@@ -99,8 +100,8 @@
 {% endif %}
 
 {% if admin and failed %}
-  <details class="failures">
-    <summary>{{ failed|length }} failed</summary>
+  <details class="failures"{{ ' open' if failed_recently }}>
+    <summary>{{ failed|length }} failed{% if failed_recently %} — one just now{% endif %}</summary>
     <ul>
       {% for ep in failed %}
         <li>

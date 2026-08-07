@@ -104,14 +104,14 @@ def run_episode(episode_id: str, cfg: dict, from_stage: str | None = None,
             fn(episode_id, cfg)
         except PipelineError as e:
             db.stage_end(episode_id, stage_name, ok=False, detail=str(e))
-            db.update_episode(episode_id, status="failed", error=str(e))
+            db.mark_failed(episode_id, str(e))
             db.set_progress(episode_id, None)
             log.error("episode %s failed at %s: %s", episode_id, stage_name, e)
             return
         except Exception as e:
             detail = f"{e}\n{traceback.format_exc()[-1500:]}"
             db.stage_end(episode_id, stage_name, ok=False, detail=detail)
-            db.update_episode(episode_id, status="failed", error=str(e))
+            db.mark_failed(episode_id, str(e))
             db.set_progress(episode_id, None)
             log.exception("episode %s crashed at %s", episode_id, stage_name)
             return

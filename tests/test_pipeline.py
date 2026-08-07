@@ -1544,3 +1544,76 @@ def test_the_shipped_limit_stays_under_pros_price_cliff():
     assert limit >= 411, "a 400-page government report is not an exotic case"
     assert limit <= 775, "past this Pro charges double and [costs] understates it"
     assert limit <= API_MAX_PAGES
+
+
+# ---------------------------------------------- title case and episode numbers
+
+def test_generated_titles_are_forced_into_title_case():
+    """The prompt asks for it; this makes it so. A model follows a
+    capitalization instruction most of the time, and "most of the time" is
+    exactly what looks like sloppiness in a list."""
+    from prose import title_case
+
+    assert title_case("The myth of the feudal venture capitalist") == (
+        "The Myth of the Feudal Venture Capitalist")
+    assert title_case("Why new cars lose value instantly") == (
+        "Why New Cars Lose Value Instantly")
+    # Small words stay down in the middle, up at either end.
+    assert title_case("the market for lemons") == "The Market for Lemons"
+    assert title_case("what serfdom was for") == "What Serfdom Was For"
+
+
+def test_title_case_never_moves_a_capital_somebody_meant():
+    """Blindly upper-casing first letters is how "iPhone" becomes "IPhone" --
+    and those are the words a reader notices."""
+    from prose import title_case
+
+    assert title_case("How iPhone changed eBay") == "How iPhone Changed eBay"
+    assert title_case("The GDP illusion") == "The GDP Illusion"
+    assert title_case("What McKinsey got wrong") == "What McKinsey Got Wrong"
+    # An already-correct title survives untouched.
+    same = "The Myth of the Feudal Venture Capitalist"
+    assert title_case(same) == same
+
+
+def test_the_title_prompt_asks_for_one_format():
+    """The bug was a prompt that permitted both and got both."""
+    body = (Path(__file__).resolve().parents[1] / "prompts" / "episode_title.md").read_text()
+    assert "Title Case" in body
+    assert "Sentence case or title case" not in body, (
+        "offering a choice is what produced the inconsistency"
+    )
+
+
+def test_numbers_are_given_at_publish_and_never_reused(_isolated_db):
+    """Numbering at upload would count papers that failed, that stayed
+    private, and the extra renderings made when comparing voices -- so the
+    public feed would read 1, 2, 5, 9."""
+    import db
+
+    for i, eid in enumerate(["EA", "EB", "EC"]):
+        db.create_episode(eid, f"/tmp/{eid}.pdf", f"sha-{eid}")
+
+    assert db.assign_episode_number("EB") == 1, "first published, not first uploaded"
+    assert db.assign_episode_number("EA") == 2
+    # Already numbered: publishing again does not shuffle it.
+    assert db.assign_episode_number("EB") == 1
+
+    # Unpublishing keeps the number, so "episode 1" still means the same thing.
+    db.update_episode("EB", published=0)
+    assert db.get_episode("EB")["episode_number"] == 1
+    assert db.assign_episode_number("EC") == 3, "the gap is not backfilled"
+
+
+def test_a_revoiced_rendering_inherits_its_siblings_number(_isolated_db):
+    """Same paper, same discussion, different voice -- and publishing one
+    unpublishes the other. A new number would advertise a duplicate."""
+    import db
+
+    db.create_episode("EORIG", "/tmp/p.pdf", "same-sha")
+    db.create_episode("EOTHER", "/tmp/q.pdf", "other-sha")
+    db.create_episode("ECLONE", "/tmp/p.pdf", "same-sha")
+
+    assert db.assign_episode_number("EORIG") == 1
+    assert db.assign_episode_number("EOTHER") == 2
+    assert db.assign_episode_number("ECLONE") == 1, "the same episode, re-voiced"

@@ -49,6 +49,14 @@ No text anywhere reads as a scan and says to OCR it. A little text but not enoug
 
 So re-uploading a paper that was turned away at ingest re-runs validation. If it now passes, the existing episode is accepted and queued rather than reported as a duplicate; if it still fails, its stored reason is rewritten to state today's limit. Only episodes that never entered the pipeline qualify — an empty stage log is exactly what an ingest-time rejection looks like, and quietly restarting a scripting or TTS failure would re-spend real money.
 
+A re-accepted episode is **re-dated**. The row is reused, and `created_at` is both what the library sorts on and what the feed sends as `pubDate` — so without this a paper you just re-uploaded would appear wherever it sat when it first bounced, days down a newest-first list. Re-uploading is a new submission and needs to surface like one.
+
+### Where failures go
+
+A failed episode leaves the main list for a collapsed box at the bottom of the admin page. That is right for a failure from last week and wrong for one from ten minutes ago: the episode you were watching disappears from where you were watching it, with a shut disclosure element the only trace.
+
+So `failed_at` is stamped whenever an episode fails — `db.mark_failed()` is the single path, rather than three call sites each remembering — and a failure inside the last six hours opens the box and says "one just now". Older ones settle back down.
+
 ### Is it stuck, or just slow?
 
 A running episode shows what it is doing (`synthesizing chunk 3 of 12`) and how long it has been doing it, on both the episode page and the admin queue. TTS is the long stage: chunks land every minute or two, so the timestamp is the signal, not the stage name. Past 15 minutes with no movement the line turns red and reads *stalled* — retry the stage from the episode page, which keeps every chunk already on disk and re-synthesizes only what is missing.
@@ -75,6 +83,18 @@ An episode with a script has a **Rewrite the script** panel. Two buttons:
 Both run the scripting stage **and stop**. Audio is ~97% of an episode's cost, so re-synthesizing on every wording change would make iteration unaffordable; the existing audio is left alone and the episode goes to `needs_review`. When the script reads right, re-run from `synthesizing` — the retry picker already defaults there.
 
 The previous script is kept for a one-step undo. An episode whose script is newer than its audio says so at the top of the page, because otherwise the player quietly serves words nobody approved.
+
+### Titles and episode numbers
+
+Episode titles are **Title Case**, and that is enforced in code rather than only asked for in the prompt. `prompts/episode_title.md` used to say "sentence case or title case", which produced exactly what you would expect — a list where every other entry was capitalized differently. A model follows a capitalization instruction most of the time, and "most of the time" is the failure mode, so `prose.title_case()` normalizes what comes back.
+
+It is conservative in one specific way: a word that already contains a capital is left completely alone. Upper-casing first letters blindly turns "iPhone" into "IPhone" and "eBay" into "EBay", and those are precisely the words a reader notices. Only all-lowercase words are touched, so the rule can add a capital but never move one. A title you type by hand is never normalized at all.
+
+**Numbers are assigned at first publish**, not at upload, and never reused. Uploading is the wrong moment: papers that failed validation, episodes still private, and the extra renderings created when comparing voice models would all consume numbers the feed never shows, so it would count 1, 2, 5, 9. Unpublishing keeps the number, so a listener's "episode 7" still means the same episode afterwards, and the gap it leaves is not backfilled.
+
+A re-voiced rendering inherits its sibling's number. It is the same paper and the same discussion in a different voice, and publishing it unpublishes the other — calling it a new episode would advertise a duplicate.
+
+The number appears as `itunes:episode` in the feed, and is omitted rather than sent as `0` for anything published before numbering existed, since Apple requires a non-zero integer.
 
 ### Categories
 
