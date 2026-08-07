@@ -2729,6 +2729,51 @@ def test_api_clients_still_get_json(client, env):
     assert resp.json()["detail"] == "no such episode"
 
 
+# ------------------------------------------------------------------ analytics
+
+def test_the_tag_loads_for_readers(public_client, env):
+    body = public_client.get("/").text
+    assert "googletagmanager.com/gtag/js?id=G-HH8EPPY7RM" in body
+    assert "gtag('config', 'G-HH8EPPY7RM')" in body
+
+
+def test_the_tag_does_not_load_for_a_signed_in_admin(public_client, env):
+    """Counting every episode edit as reader traffic is the fastest way to make
+    the numbers useless."""
+    public_client.post("/admin/login", data={"password": "hunter2"})
+    for url in ("/admin", "/", "/terms"):
+        assert "googletagmanager" not in public_client.get(url).text, url
+
+
+def test_an_empty_id_emits_no_script_at_all(public_client, env, monkeypatch):
+    """Disabling it should mean no request to Google, not an inert tag."""
+    import app as app_mod
+
+    monkeypatch.setitem(app_mod.templates.env.globals, "analytics_id", "")
+    body = public_client.get("/").text
+    assert "googletagmanager" not in body
+    assert "gtag(" not in body
+
+
+def test_the_terms_page_matches_what_the_site_actually_does(public_client, env):
+    """It used to promise "no analytics ... no third-party trackers", which
+    adding the tag made false on a public page."""
+    import app as app_mod
+
+    body = public_client.get("/terms").text
+    assert "Google Analytics" in body
+    assert "no analytics" not in body
+    assert "policies.google.com/privacy" in body
+
+
+def test_the_terms_page_tells_the_truth_when_analytics_is_off(public_client, env,
+                                                              monkeypatch):
+    import app as app_mod
+
+    monkeypatch.setitem(app_mod.templates.env.globals, "analytics_id", "")
+    body = public_client.get("/terms").text
+    assert "no analytics" in body
+    assert "Google Analytics" not in body
 # ------------------------------------------------- podcast directory readiness
 
 def _live_episode(env, tmp_path, name="feed.pdf", duration=612.4):

@@ -165,6 +165,8 @@ All knobs live in `config.toml`, loaded once at startup.
   one, a stalled connection blocks its worker indefinitely: the episode sits in
   `synthesizing` with no error and nothing behind it starts. Timeouts count as
   retryable, so one bad connection costs a retry rather than the chunk.
+- `[site]` — `owner_name` and `contact_email` (shown on the terms page, and used as the podcast owner contact in the feed), plus `analytics_id`.
+  - `analytics_id` is a Google Analytics measurement ID. **Empty disables it entirely** — no script tag, no request to Google — and the terms page changes to match. It is never loaded for a signed-in admin, so editing the library does not turn up in the numbers as reader traffic.
 - `[costs]` — per-model token prices used to compute the per-episode cost shown in the UI.
 
 Prompts live in `prompts/` as plain Markdown, loaded at call time rather than baked into Python. `script_system.md` is the main quality lever — edit it freely without touching code.

@@ -70,12 +70,29 @@
   </p>
 
   <h2>Privacy</h2>
+  {% if analytics_id %}
+  <p>
+    This site has no user accounts and carries no advertising.
+    It uses Google Analytics to count visits and see which episodes are
+    listened to. Google sets cookies in your browser for this and receives
+    your IP address; what they do with it is governed by
+    <a href="https://policies.google.com/privacy" rel="noopener nofollow" target="_blank">their
+    privacy policy</a>. Nothing else is tracked, no profile is built, and
+    nothing is sold or shared with anyone else.
+  </p>
+  <p>
+    Most browsers can block this, and any tracker-blocking extension will.
+    Neither affects the site working. Standard server logs may also record
+    requests, including IP addresses, for operational purposes.
+  </p>
+  {% else %}
   <p>
     This site has no user accounts, no analytics, no advertising, and no third-party
     trackers. It sets no cookies for ordinary visitors — the only cookie it ever
     issues is a sign-in session for the site's own administrator. Standard server
     logs may record requests, including IP addresses, for operational purposes.
   </p>
+  {% endif %}
 
   <h2>Changes</h2>
   <p>

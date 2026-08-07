@@ -166,6 +166,10 @@ copyright   = "Episode audio © Josh Paul. Source papers remain the property of 
 # Shown on the terms page and used as the podcast owner contact in the feed.
 owner_name    = "Josh Paul"
 contact_email = "jbpaul275@gmail.com"
+# Google Analytics measurement ID. Empty disables the tag entirely -- no script
+# tag, no request to Google. It is never loaded for a signed-in admin, so
+# editing the library does not turn up in the numbers as reader traffic.
+analytics_id  = "G-HH8EPPY7RM"
 
 # USD per 1M tokens, from the published Gemini API rates.
 #
