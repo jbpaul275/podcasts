@@ -48,6 +48,8 @@ _NON_AUTHOR_ENTITIES = {
     "America", "American", "British", "European", "Union's", "States",
     "January", "February", "March", "April", "May", "June", "July",
     "August", "September", "October", "November", "December",
+    "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
+    "Sunday", "Spring", "Summer", "Autumn", "Fall", "Winter",
 }
 
 _NOT_AUTHOR_TOKENS = _COMMON_SENTENCE_STARTERS | _NON_AUTHOR_ENTITIES
@@ -73,6 +75,25 @@ _STATUTE_RE = re.compile(
 )
 
 _LEADING_NAME_RE = re.compile(r"^(?:[A-Z][\w'’-]*(?:\s+(?:and|&|of|for|de|van|von)\s+)?)+")
+
+# How many words either side of a bare year can carry the name.
+_YEAR_WINDOW = 2
+
+
+def _depossess(token: str) -> str:
+    """"Acemoglu's" -> "Acemoglu". The paper writes the bare surname."""
+    return re.sub(r"['’]s\b", "", token)
+
+
+def _looks_like_an_author(token: str) -> bool:
+    # Strip a possessive so "Acemoglu's" is tested as a name and "There's" is
+    # recognised as the stopword it is.
+    bare = _depossess(token)
+    return (
+        len(bare) > 2
+        and bare[:1].isupper()
+        and bare not in _NOT_AUTHOR_TOKENS
+    )
 
 
 def _script_config(cfg: dict, system: str):
@@ -290,6 +311,11 @@ def appears_in_paper(flag_text: str, paper_text_normalized: str) -> bool:
     """
     if _normalize(flag_text) in paper_text_normalized:
         return True
+    # The hosts say "Gould's 1969 decision"; the paper says "Gould". Match on
+    # the bare name or every possessive citation reads as uncorroborated.
+    flag_text = _depossess(flag_text)
+    if _normalize(flag_text) in paper_text_normalized:
+        return True
     # Strip the trailing year and any connective tail, leaving the name.
     stem = re.sub(r"\s*\(?\b(?:19|20)\d{2}\b\)?\s*$", "", flag_text).strip()
     stem = re.sub(r"\s+(?:in|of|for|from|at|the|and|by|to)$", "", stem).strip()
@@ -344,24 +370,30 @@ def citation_flags(script: str, paper_text: str | None = None,
         for m in _ET_AL_RE.finditer(body):
             spans.append((m.start(), m.end(), "et al.", m.group(0)))
 
-        # A bare year is suspicious when a proper noun sits just before it.
-        # Scanning backward from the year (rather than forward from a capital)
+        # A bare year is suspicious when a proper noun sits right against it.
+        # Scanning outward from the year (rather than forward from a capital)
         # avoids the non-overlapping-match trap, where a leading "The" would
         # otherwise swallow the real proper noun behind it.
+        #
+        # The window is deliberately tight. At four words it swept up ordinary
+        # conversation -- "a Tuesday afternoon back in 2018" -- because any
+        # capitalised word loosely near a year matched. A citation keeps the
+        # name against the year: "Acemoglu's 2001 paper", "a 2019 study by Roe".
         for m in _YEAR_RE.finditer(body):
-            preceding = _WORD_RE.finditer(body[: m.start()])
-            for w in list(preceding)[-4:]:
-                token = w.group(0)
-                if (
-                    len(token) > 2
-                    and token[:1].isupper()
-                    and token not in _NOT_AUTHOR_TOKENS
-                ):
-                    spans.append(
-                        (w.start(), m.end(), "proper noun near year",
-                         body[w.start():m.end()])
-                    )
+            hit = None
+            for w in list(_WORD_RE.finditer(body[: m.start()]))[-_YEAR_WINDOW:]:
+                if _looks_like_an_author(w.group(0)):
+                    hit = (w.start(), m.end())
                     break
+            if hit is None:
+                # Names also follow the year: "the 2019 Roe paper".
+                for w in list(_WORD_RE.finditer(body[m.end():]))[:_YEAR_WINDOW]:
+                    if _looks_like_an_author(w.group(0)):
+                        hit = (m.start(), m.end() + w.end())
+                        break
+            if hit is not None:
+                spans.append((hit[0], hit[1], "proper noun near year",
+                              body[hit[0]:hit[1]]))
 
         # Collapse overlaps: a full name-year cite subsumes the weaker hits
         # inside it, so each real citation is reported once.

@@ -103,14 +103,39 @@ def test_citation_flags_catch_fabrication_shapes():
     script = "\n".join([
         "HOST_A: Card and Krueger (1994) found the opposite.",
         "HOST_B: Right, and Chetty et al. push on that.",
-        "HOST_A: The Mariel boatlift in 1980 is the classic case.",
+        "HOST_A: Acemoglu's 2001 paper argued the reverse.",
+        "HOST_B: The 1969 Gould decision changed the board.",
     ])
     flags = citation_flags(script)
     texts = " ".join(f["text"] for f in flags)
 
     assert "Card and Krueger (1994)" in texts
     assert any("et al" in f["text"] for f in flags)
-    assert any(f["line"] == 3 for f in flags), "proper noun near a year should flag"
+    assert any(f["line"] == 3 for f in flags), "a name possessive of a year is a cite"
+    assert any(f["line"] == 4 for f in flags), "a name after the year is a cite too"
+
+
+def test_a_year_in_ordinary_conversation_does_not_flag():
+    """The window is deliberately tight. At four words any capitalised word
+    loosely near a year matched, and scripts are full of those."""
+    from pipeline.script import citation_flags
+
+    for line in [
+        "HOST_A: does that match what you were doing on a Tuesday afternoon back in 2018?",
+        "HOST_B: The Mariel boatlift in 1980 is the classic case.",
+        "HOST_A: Your LinkedIn profile from 2019 says otherwise.",
+        "HOST_B: We spoke about this last Friday in 2021.",
+        "HOST_A: There's a 2019 study by Fabricated somewhere.",
+    ]:
+        assert citation_flags(line) == [], f"should not flag: {line!r}"
+
+
+def test_possessive_stopwords_are_not_authors():
+    from pipeline.script import _looks_like_an_author
+
+    assert _looks_like_an_author("Acemoglu's")
+    assert not _looks_like_an_author("There's"), "a contraction is not a surname"
+    assert not _looks_like_an_author("It's")
 
 
 def test_citation_flags_ignore_ordinary_dialogue():
@@ -143,14 +168,14 @@ def test_flags_are_checked_against_the_paper():
     from pipeline.script import citation_flags
 
     script = (
-        "HOST_A: William Gould for the 1969 board decision.\n"
-        "HOST_B: And Fictitious Person in 1977 supposedly agreed."
+        "HOST_A: Gould's 1969 board decision set the precedent.\n"
+        "HOST_B: And Fictitious's 1977 ruling supposedly agreed."
     )
     paper = "... appointed William Gould to the board in 1969, which ..."
 
     flags = {f["text"]: f["in_paper"] for f in citation_flags(script, paper)}
-    assert flags["William Gould for the 1969"] is True
-    assert flags["Fictitious Person in 1977"] is False
+    assert flags["Gould's 1969"] is True
+    assert flags["Fictitious's 1977"] is False
 
 
 def test_in_paper_absent_without_paper_text():
