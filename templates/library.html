@@ -13,6 +13,7 @@
 </div>
 
 {% if admin and error %}<p class="error flash">{{ error }}</p>{% endif %}
+{% if deleted %}<p class="flash ok" role="status">Episode deleted, along with its PDF and audio.</p>{% endif %}
 
 <ul class="posts">
 {% for ep in episodes %}
