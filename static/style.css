@@ -137,6 +137,22 @@ main.wide { max-width: 62rem; }
    without this they push the page wider than the viewport on phones. */
 .error { color: var(--err); font-size: 0.88rem; margin: 0.6rem 0 0; overflow-wrap: anywhere; }
 
+/* rewriting the script */
+.stalewarn {
+  border-left: 3px solid var(--flag); background: #fffbf3; padding: 0.7rem 0.9rem;
+  margin: 1rem 0 0; border-radius: 0 8px 8px 0; font-size: 0.9rem;
+}
+@media (prefers-color-scheme: dark) { .stalewarn { background: #2a2417; } }
+.rewritebox { margin-top: 1.5rem; }
+.rewritebox textarea { width: 100%; font: inherit; }
+.rewritebox .lastnote { font-size: 0.85rem; color: var(--muted); margin: 0.5rem 0 0.9rem; font-style: italic; }
+.rewritebox .hint { font-size: 0.78rem; color: var(--muted); margin: 0.35rem 0 1rem; line-height: 1.5; }
+.rewritebox label { display: block; font-size: 0.8rem; font-weight: 600; margin: 0.9rem 0 0.3rem; }
+.rwactions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.75rem; }
+button.secondary { background: transparent; color: var(--muted); border: 1px solid #d9d9d6; }
+.revertform { margin-top: 1rem; display: flex; gap: 0.6rem; align-items: center; }
+.status-needs_review { background: #eef2fb; color: #2f4f8f; }
+
 /* what a running episode is doing right now */
 .progress { color: var(--muted); font-size: 0.88rem; margin: 0.6rem 0 0; }
 .progress.bad { color: var(--err); }
