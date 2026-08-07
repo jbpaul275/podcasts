@@ -68,6 +68,22 @@ def _make_pdf(path: Path, pages: int = 3, text: str | None = None):
     doc.close()
 
 
+def _make_scanned_pdf(path: Path, pages: int = 3):
+    """Image-only pages: a real scan, with no text layer at all.
+
+    The previous stand-in was a PDF whose first page was nearly empty but whose
+    later pages carried hundreds of characters. That only looked like a scan
+    because the check sampled page one alone.
+    """
+    import fitz
+
+    doc = fitz.open()
+    for _ in range(pages):
+        doc.new_page().draw_rect(fitz.Rect(40, 40, 500, 700), fill=(0.85, 0.85, 0.85))
+    doc.save(str(path))
+    doc.close()
+
+
 @pytest.fixture
 def env(tmp_path, monkeypatch):
     """Isolated data dirs + DB, with all Gemini calls stubbed."""
@@ -175,8 +191,8 @@ def test_ingest_rejects_scanned_pdf(env, tmp_path):
     from pipeline import PipelineError, ingest
 
     pdf = tmp_path / "scan.pdf"
-    _make_pdf(pdf, pages=2, text="Fig 1.")  # almost no text layer
-    with pytest.raises(PipelineError, match="scanned"):
+    _make_scanned_pdf(pdf, pages=2)
+    with pytest.raises(PipelineError, match="no text layer"):
         ingest.ingest_pdf(pdf, env["cfg"])
 
 
@@ -195,14 +211,14 @@ def test_rejected_pdf_is_visible_as_failed_episode(env, tmp_path):
     from pipeline import PipelineError, ingest
 
     pdf = tmp_path / "scan.pdf"
-    _make_pdf(pdf, pages=1, text="x")
+    _make_scanned_pdf(pdf, pages=1)
     with pytest.raises(PipelineError):
         ingest.ingest_pdf(pdf, env["cfg"])
 
     rows = db.list_episodes()
     assert len(rows) == 1
     assert rows[0]["status"] == "failed"
-    assert "scanned" in rows[0]["error"]
+    assert "no text layer" in rows[0]["error"]
 
 
 def test_duplicate_pdf_is_skipped(env, tmp_path):
@@ -1433,7 +1449,7 @@ def test_rejected_upload_returns_a_readable_message(public_client, env, tmp_path
     """A scanned or over-long PDF used to dump raw JSON at the browser."""
     public_client.post("/admin/login", data={"password": "hunter2"})
     scan = tmp_path / "scan.pdf"
-    _make_pdf(scan, pages=1, text="Fig 1.")
+    _make_scanned_pdf(scan, pages=1)
 
     resp = public_client.post(
         "/upload", files={"file": ("scan.pdf", scan.read_bytes(), "application/pdf")},
@@ -1441,9 +1457,9 @@ def test_rejected_upload_returns_a_readable_message(public_client, env, tmp_path
     )
     assert resp.status_code == 303
     assert resp.headers["location"].startswith("/admin?error=")
-    assert "scanned" in resp.headers["location"]
+    assert "no+text+layer" in resp.headers["location"] or "no%20text%20layer" in resp.headers["location"]
 
-    assert "scanned" in public_client.get(resp.headers["location"]).text
+    assert "no text layer" in public_client.get(resp.headers["location"]).text
 
 
 def test_upload_succeeds_while_another_episode_is_processing(public_client, env, tmp_path):
@@ -2758,3 +2774,187 @@ def test_the_terms_page_tells_the_truth_when_analytics_is_off(public_client, env
     body = public_client.get("/terms").text
     assert "no analytics" in body
     assert "Google Analytics" not in body
+# ------------------------------------------------- podcast directory readiness
+
+def _live_episode(env, tmp_path, name="feed.pdf", duration=612.4):
+    import db
+    from pipeline import ingest
+
+    pdf = tmp_path / name
+    _make_pdf(pdf)
+    eid = ingest.ingest_pdf(pdf, env["cfg"])
+    mp3 = env["final"] / f"{eid}.mp3"
+    mp3.write_bytes(b"\xff\xfb" + b"\0" * 5000)
+    db.update_episode(eid, status="done", published=1, flags_reviewed=1,
+                      title=name, audio_path=str(mp3), duration_s=duration,
+                      authors=json.dumps(["A Person"]), summary="A blurb.")
+    return eid
+
+
+def test_the_enclosure_answers_head(client, env, tmp_path):
+    """Apple and Spotify probe the media URL before accepting a feed.
+    FastAPI's @app.get does not answer HEAD, and a 405 reads as a broken URL."""
+    eid = _live_episode(env, tmp_path, "head.pdf")
+    resp = client.head(f"/episode/{eid}/audio")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "audio/mpeg"
+    assert int(resp.headers["content-length"]) == 5002
+    assert resp.headers["accept-ranges"] == "bytes"
+    assert resp.content == b"", "HEAD must carry no body"
+
+
+def test_a_missing_duration_omits_the_tag(client, env, tmp_path):
+    """"--:--" is what the web UI shows for unknown. It is not a duration."""
+    _live_episode(env, tmp_path, "nodur.pdf", duration=None)
+    xml = client.get("/feed.xml").text
+    assert "--:--" not in xml
+    assert "<itunes:duration>" not in xml
+
+
+def test_duration_is_emitted_as_whole_seconds(client, env, tmp_path):
+    _live_episode(env, tmp_path, "dur.pdf", duration=612.4)
+    assert "<itunes:duration>612</itunes:duration>" in client.get("/feed.xml").text
+
+
+def test_the_feed_carries_what_the_directories_require(client, env, tmp_path):
+    from xml.dom.minidom import parseString
+
+    _live_episode(env, tmp_path, "req.pdf")
+    xml = client.get("/feed.xml").text
+    parseString(xml)  # well-formed, or this raises
+
+    for tag in ("<language>", "<itunes:explicit>", "<itunes:type>",
+                "<itunes:image", "<itunes:category", "<itunes:owner>",
+                "<itunes:email>", "<atom:link", "<lastBuildDate>", "<copyright>"):
+        assert tag in xml, tag
+    # Item level.
+    for tag in ("<guid isPermaLink=\"false\">", "<pubDate>", "<enclosure ",
+                "<itunes:explicit>", "<itunes:episodeType>"):
+        assert tag in xml, tag
+    assert 'type="audio/mpeg"' in xml and 'length="5002"' in xml
+
+
+def test_feed_artwork_url_carries_no_query_string(client, env, tmp_path):
+    """Cache-busting is for browsers; a query string is a needless thing for a
+    directory validator to object to."""
+    import re as _re
+
+    _live_episode(env, tmp_path, "art.pdf")
+    xml = client.get("/feed.xml").text
+    for href in _re.findall(r'itunes:image href="([^"]+)"', xml):
+        assert "?" not in href, href
+
+
+def test_readiness_flags_the_things_that_get_shows_rejected(client, env, tmp_path,
+                                                            monkeypatch):
+    import app as app_mod
+
+    # Nothing published, http base url, unknown category.
+    monkeypatch.setitem(app_mod.CFG, "feed", {**env["cfg"].get("feed", {}),
+                                              "category": "Underwater Basketry"})
+    monkeypatch.setitem(app_mod.CFG, "site", {"contact_email": ""})
+    text = " ".join(c["text"] for c in app_mod.feed_readiness() if c["ok"] is False)
+    assert "No published episodes" in text
+    assert "https" in text
+    assert "contact_email" in text
+    assert "Underwater Basketry" in text
+
+    body = client.get("/admin/feed").text
+    assert "would stop submission" in body
+
+
+def test_readiness_passes_on_a_healthy_setup(client, env, tmp_path, monkeypatch):
+    import app as app_mod
+
+    _live_episode(env, tmp_path, "ready.pdf")
+    monkeypatch.setitem(app_mod.CFG, "server",
+                        {**env["cfg"]["server"], "base_url": "https://paperpod.org"})
+    monkeypatch.setitem(app_mod.CFG, "feed", {"category": "Science",
+                                              "subcategory": "Social Sciences"})
+    monkeypatch.setitem(app_mod.CFG, "site", {"contact_email": "a@b.com"})
+    assert [c for c in app_mod.feed_readiness() if c["ok"] is False] == []
+    assert "podcastsconnect.apple.com" in client.get("/admin/feed").text
+
+
+def test_the_feed_check_needs_admin(public_client):
+    assert public_client.get("/admin/feed", follow_redirects=False
+                             ).headers["location"] == "/admin/login"
+# ---------------------------------------------------------- PDF acceptance
+
+def test_a_sparse_cover_page_is_not_a_scan(env, tmp_path):
+    """The reported bug. Working-paper series open on a cover page carrying
+    almost nothing — BLS, NBER and IZA all do — and checking only page one
+    called a perfectly good paper a scan."""
+    import fitz
+    from pipeline import ingest
+
+    pdf = tmp_path / "cover.pdf"
+    doc = fitz.open()
+    doc.new_page().insert_textbox(
+        fitz.Rect(50, 50, 550, 750),
+        "BLS WORKING PAPERS\nU.S. Bureau of Labor Statistics\n"
+        "The Impact of Remote Work\nWorking Paper 553", fontsize=11)
+    for _ in range(6):
+        doc.new_page().insert_textbox(fitz.Rect(50, 50, 550, 750),
+                                      "Real body text. " * 60, fontsize=9)
+    doc.save(str(pdf))
+    doc.close()
+
+    first_page_chars = len(fitz.open(pdf)[0].get_text().strip())
+    assert first_page_chars < 500, "the fixture must reproduce the sparse cover"
+    assert ingest.ingest_pdf(pdf, env["cfg"]), "it should be accepted anyway"
+
+
+def test_a_document_with_no_text_anywhere_is_still_refused(env, tmp_path):
+    from pipeline import PipelineError, ingest
+
+    pdf = tmp_path / "scan.pdf"
+    _make_scanned_pdf(pdf, pages=12)
+    with pytest.raises(PipelineError, match="no text at all"):
+        ingest.ingest_pdf(pdf, env["cfg"])
+
+
+def test_a_thin_document_is_not_called_a_scan(env, tmp_path):
+    """Some text but not much is a different problem, and "run OCR" is the
+    wrong advice for it."""
+    import fitz
+    from pipeline import PipelineError, ingest
+
+    pdf = tmp_path / "thin.pdf"
+    doc = fitz.open()
+    doc.new_page().insert_textbox(fitz.Rect(50, 50, 550, 750), "A short note.",
+                                  fontsize=11)
+    doc.save(str(pdf))
+    doc.close()
+
+    with pytest.raises(PipelineError, match="Too little to work from"):
+        ingest.ingest_pdf(pdf, env["cfg"])
+
+
+def test_the_page_limit_names_the_api_ceiling(env, tmp_path):
+    """The limit is editorial, so the message should say how to raise it."""
+    from pipeline import PipelineError, ingest
+
+    pdf = tmp_path / "long.pdf"
+    _make_pdf(pdf, pages=8)
+    cfg = {**env["cfg"], "script": {"target_words": 1600, "max_pages": 5}}
+    with pytest.raises(PipelineError, match="max_pages"):
+        ingest.ingest_pdf(pdf, cfg)
+
+
+def test_the_configured_limit_cannot_exceed_the_api(env, tmp_path):
+    """Allowing 5000 here would just move the failure to an opaque API error."""
+    from pipeline.ingest import API_MAX_PAGES, _validate
+
+    pdf = tmp_path / "ok.pdf"
+    _make_pdf(pdf, pages=3)
+    cfg = {**env["cfg"], "script": {"target_words": 1600, "max_pages": 99999}}
+    assert _validate(pdf, cfg) is None
+    assert API_MAX_PAGES == 1000
+
+
+def test_the_shipped_page_limit_allows_a_long_report():
+    """163 pages is a normal government report, and used to be refused."""
+    from config import load_config
+
+    assert load_config()["script"]["max_pages"] >= 200

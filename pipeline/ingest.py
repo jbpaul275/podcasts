@@ -44,18 +44,7 @@ def ingest_pdf(path: str | Path, cfg: dict) -> str:
 
     error = None
     try:
-        doc = fitz.open(dest)
-        pages = doc.page_count
-        first_page_text = doc[0].get_text() if pages else ""
-        doc.close()
-        max_pages = cfg["script"]["max_pages"]
-        if pages > max_pages:
-            error = f"paper is {pages} pages; limit is {max_pages}. Rejected rather than truncated."
-        elif len(first_page_text.strip()) < 500:
-            error = (
-                "first-page text extraction yielded under 500 characters -- likely a "
-                "scanned PDF with no text layer, which is out of scope for v1."
-            )
+        error = _validate(dest, cfg)
     except Exception as e:
         error = f"could not open PDF: {e}"
 
@@ -69,6 +58,55 @@ def ingest_pdf(path: str | Path, cfg: dict) -> str:
     if error:
         raise PipelineError(error)
     return episode_id
+
+
+# How many pages to sample when deciding whether a PDF has a text layer.
+# Working papers open on a cover page carrying almost nothing -- BLS, NBER and
+# IZA all do this -- so looking only at page one calls a perfectly good paper a
+# scan. A genuine scan has no text on any page, so a handful is plenty.
+TEXT_SAMPLE_PAGES = 10
+MIN_TEXT_CHARS = 500
+
+# The API's own ceilings: 1000 pages and 50 MB per PDF. Worth checking here so
+# an oversized file is refused with a sentence instead of failing later with
+# whatever the API says about it.
+API_MAX_PAGES = 1000
+API_MAX_MB = 50
+
+
+def _validate(pdf: Path, cfg: dict) -> str | None:
+    """Why this PDF cannot be used, or None. Every message says what to do."""
+    size_mb = pdf.stat().st_size / (1024 * 1024)
+    doc = fitz.open(pdf)
+    try:
+        pages = doc.page_count
+        sampled = [doc[i].get_text().strip() for i in range(min(pages, TEXT_SAMPLE_PAGES))]
+    finally:
+        doc.close()
+
+    max_pages = min(int(cfg["script"]["max_pages"]), API_MAX_PAGES)
+    if pages == 0:
+        return "the PDF has no pages."
+    if pages > max_pages:
+        return (f"paper is {pages} pages; the limit is {max_pages}. Rejected rather "
+                f"than truncated. Raise [script] max_pages if you want it — the API "
+                f"itself stops at {API_MAX_PAGES}.")
+    if size_mb > API_MAX_MB:
+        return (f"the file is {size_mb:.0f} MB; the API accepts {API_MAX_MB} MB per "
+                "PDF. Re-save it with compressed images and try again.")
+
+    found = sum(len(t) for t in sampled)
+    looked = len(sampled)
+    where = (f"the first {looked} pages" if looked > 1 else "its only page")
+    if found == 0:
+        return (f"no text at all on {where} — this is a scan with no text layer. "
+                "Run it through OCR and upload the result.")
+    if found < MIN_TEXT_CHARS:
+        # Some text, just not much. Saying "scan" here would send someone off to
+        # OCR a document that is simply thin.
+        return (f"only {found} characters of text on {where}. Too little to work "
+                "from — if the body is images of text, OCR it first.")
+    return None
 
 
 def _metadata_prompt(cfg: dict) -> str:

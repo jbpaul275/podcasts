@@ -12,7 +12,7 @@ PDF → ingest → script → TTS → assemble → MP3
 
 | Stage | What it does |
 |---|---|
-| `ingest` | SHA-256 dedupe, page-count and text-layer validation, copy into `data/papers/`, native-PDF metadata extraction |
+| `ingest` | SHA-256 dedupe, size/page/text-layer validation, copy into `data/papers/`, native-PDF metadata extraction |
 | `script` | Sends the PDF natively (so tables and figures survive) and returns speaker-tagged dialogue |
 | `tts` | Chunks the script on speaker-turn boundaries, synthesizes each chunk with two-speaker TTS |
 | `assemble` | ffmpeg concat with seam silence, two-pass loudness normalization, 96k mono MP3 with ID3 tags |
@@ -36,6 +36,14 @@ The API key is read from the environment only. It is never written to `config.to
 Open <http://localhost:8000>. Drop a PDF on the page, or copy one into `data/inbox/` — a watcher picks it up automatically (2-second debounce so partially-written files are ignored). Originals in the inbox are never mutated or deleted; they are moved to `data/inbox/processed/` once registered.
 
 The episode page shows the player, the full script with per-speaker styling, the stage log, and the accumulated API cost. Failed runs can be re-run from any named stage.
+
+### Which PDFs are accepted
+
+Rejections are checked before anything is spent, and every message says what to do about it.
+
+The text-layer check samples the **first ten pages**, not the first one. Working-paper series open on a cover page carrying almost nothing — BLS, NBER and IZA all do — and looking only at page one calls those a scan. A genuine scan has no text on any page, so a handful is plenty to tell them apart.
+
+No text anywhere reads as a scan and says to OCR it. A little text but not enough is a different problem and says so, because "run OCR" is the wrong advice for a document that is simply thin.
 
 ### Is it stuck, or just slow?
 
@@ -100,6 +108,23 @@ Matching is on names rather than whole phrases, because a grounding source is ti
 
 Search grounding bills per request on top of tokens, unlike the other script knobs.
 
+## Submitting to Apple Podcasts and Spotify
+
+`/admin/feed` checks the feed against what the directories actually enforce and links out to both submission forms. Worth reading before submitting: each validates once and tells you very little about what failed.
+
+What the feed carries beyond plain RSS 2.0: `itunes:type`, per-item `itunes:explicit` and `itunes:episodeType`, `copyright`, `lastBuildDate`, artwork at channel and item level, and a nested `itunes:category`/subcategory. All configurable under `[feed]`.
+
+Two things that are easy to get wrong and produce an unhelpful rejection:
+
+- **Artwork must be square, 1400×1400 to 3000×3000.** This is the most common rejection. `static/cover.png` ships at 1400×1400.
+- **`itunes:category` must be spelled exactly as in Apple's list.** The readiness check holds the list and rejects anything else.
+
+The enclosure URL answers `HEAD` as well as `GET`. Both directories probe it before accepting a feed, and FastAPI's `@app.get` alone returns 405 — which reads to them as a broken media URL rather than a missing method.
+
+A missing duration omits `itunes:duration` rather than emitting the `--:--` the web UI uses for "unknown", which is not a duration and fails validation.
+
+Publishing an episode adds it to the feed and unpublishing removes it; directories honour that on their next poll. A client that already downloaded an episode keeps its copy.
+
 ## Listening on a phone
 
 The feed at `/feed.xml` is a valid RSS 2.0 feed with the iTunes namespace and absolute enclosure URLs. There is no authentication — the tailnet is the security boundary, so do not expose this to the public internet.
@@ -123,7 +148,8 @@ All knobs live in `config.toml`, loaded once at startup.
 - `[models]` — model IDs for metadata extraction, scripting, and TTS.
 - `[voices]` — the two prebuilt voice IDs. Two speakers is the documented maximum; do not add a third host.
 - `[script]` — the content-quality knobs:
-  - `target_words` (1600 ≈ ten minutes) and the `max_pages` rejection threshold.
+  - `target_words` (1600 ≈ ten minutes).
+  - `max_pages` — an editorial limit, not a technical one. The API stops at 1000 pages and 50 MB per PDF; each page costs ~258 input tokens and the PDF is sent on both the metadata and the script call. 400 pages is ~103k tokens per call and stays under the 200k mark where Pro's input rate doubles.
   - `thinking_level` — `MINIMAL`/`LOW`/`MEDIUM`/`HIGH`. How hard the model reasons before writing. Scripting is ~2% of an episode's cost, so this is cheap to raise and it is what dense technical papers reward.
   - `grounding` — let the script model search the web. Off by default; see below.
   - `fallback_model` — used if the script model has no quota, rather than failing the episode. The substitution is recorded in the stage log and shown on the episode.

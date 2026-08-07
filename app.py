@@ -1197,7 +1197,10 @@ def episode_page(request: Request, episode_id: str, done: str = ""):
     )
 
 
-@app.get("/episode/{episode_id}/audio")
+# HEAD as well as GET: Apple and Spotify probe the enclosure before they will
+# accept a feed, and FastAPI's @app.get does not answer HEAD -- it 405s, which
+# reads to them as a broken media URL.
+@app.api_route("/episode/{episode_id}/audio", methods=["GET", "HEAD"])
 def episode_audio(episode_id: str, request: Request):
     row = db.get_episode(episode_id)
     if not row or not row["audio_path"]:
@@ -1314,11 +1317,111 @@ def health(request: Request):
     }
 
 
+# Apple's own list. An unrecognised category is a rejection, not a warning, and
+# the error it gives back does not say which field was wrong.
+APPLE_CATEGORIES = {
+    "Arts", "Business", "Comedy", "Education", "Fiction", "Government",
+    "Health & Fitness", "History", "Kids & Family", "Leisure", "Music",
+    "News", "Religion & Spirituality", "Science", "Society & Culture",
+    "Sports", "Technology", "True Crime", "TV & Film",
+}
+
+
+def feed_readiness() -> list[dict]:
+    """What would stop this feed being accepted by Apple or Spotify.
+
+    Worth checking here rather than finding out from a rejection email days
+    later: the directories validate once, tell you very little, and make you
+    resubmit.
+    """
+    fcfg, scfg = CFG.get("feed", {}), CFG.get("site", {})
+    base = CFG["server"]["base_url"].rstrip("/")
+    out = []
+
+    def bad(msg):
+        out.append({"ok": False, "text": msg})
+
+    def good(msg):
+        out.append({"ok": True, "text": msg})
+
+    live = [r for r in db.list_episodes(published_only=True)
+            if r["audio_path"] and Path(r["audio_path"]).exists()]
+    if live:
+        good(f"{len(live)} published episode{'' if len(live) == 1 else 's'} with audio")
+    else:
+        bad("No published episodes with audio. Spotify will not list a show "
+            "until at least one episode is live.")
+
+    if base.startswith("https://"):
+        good(f"Feed served over HTTPS at {base}/feed.xml")
+    else:
+        bad(f"base_url is {base}. Directories require https for the feed and "
+            "the audio.")
+
+    if "@" in (scfg.get("contact_email") or ""):
+        good(f"Owner email {scfg['contact_email']} — Apple emails this to verify you")
+    else:
+        bad("No [site] contact_email. Apple sends the ownership-verification "
+            "email there; without it you cannot claim the show.")
+
+    cover = ROOT / "static" / "cover.png"
+    if not cover.exists():
+        bad("static/cover.png is missing. Artwork is required.")
+    else:
+        try:
+            import struct
+            w, h = struct.unpack(">II", cover.read_bytes()[16:24])
+        except Exception:
+            w = h = 0
+        if w == h and 1400 <= w <= 3000:
+            good(f"Artwork {w}x{h}")
+        else:
+            bad(f"Artwork is {w}x{h}. Apple requires square, 1400x1400 to "
+                "3000x3000. This is the most common rejection.")
+
+    cat = fcfg.get("category", "")
+    if cat in APPLE_CATEGORIES:
+        good(f"Category “{cat}”" + (f" › {fcfg['subcategory']}" if fcfg.get("subcategory") else ""))
+    else:
+        bad(f"Category “{cat}” is not one Apple recognises. Pick from: "
+            + ", ".join(sorted(APPLE_CATEGORIES)))
+
+    missing_dur = [r["id"] for r in live if not r["duration_s"]]
+    if missing_dur:
+        out.append({"ok": None, "text":
+                    f"{len(missing_dur)} episode(s) have no duration. Not fatal — "
+                    "the tag is omitted — but clients show no length."})
+    return out
+
+
+@app.get("/admin/feed", response_class=HTMLResponse)
+def admin_feed(request: Request):
+    if not auth.is_admin(request):
+        return RedirectResponse("/admin/login", status_code=303)
+    checks = feed_readiness()
+    return templates.TemplateResponse(
+        request, "feedcheck.html",
+        {"admin": True, "signed_in": True, "checks": checks,
+         "blockers": [c for c in checks if c["ok"] is False],
+         "feed_url": CFG["server"]["base_url"].rstrip("/") + "/feed.xml",
+         "feed_title": CFG.get("feed", {}).get("title", "Paperpod")},
+    )
+
+
 @app.get("/feed.xml")
 def feed():
     base = CFG["server"]["base_url"].rstrip("/")
     fcfg = CFG.get("feed", {})
     scfg = CFG.get("site", {})
+    explicit = "true" if fcfg.get("explicit") else "false"
+    # Apple nests the subcategory inside the category element.
+    cat, sub = fcfg.get("category", "Science"), fcfg.get("subcategory", "")
+    category_xml = (
+        f'    <itunes:category text="{xml_escape(cat)}">\n'
+        f'      <itunes:category text="{xml_escape(sub)}"/>\n'
+        f'    </itunes:category>'
+        if sub else f'    <itunes:category text="{xml_escape(cat)}"/>'
+    )
     items = []
     for row in db.list_episodes(published_only=True):
         if not row["audio_path"]:
@@ -1342,12 +1445,18 @@ def feed():
             pub = datetime.now(timezone.utc)
         if pub.tzinfo is None:
             pub = pub.replace(tzinfo=timezone.utc)
+        # A missing duration must omit the tag, not emit the "--:--" the web
+        # UI uses for "unknown" -- that is not a duration and fails validation.
+        duration = (f"\n      <itunes:duration>{int(round(float(row['duration_s'])))}"
+                    "</itunes:duration>" if row["duration_s"] else "")
         items.append(f"""    <item>
       <title>{xml_escape(title)}</title>
       <description>{xml_escape(summary)}</description>
       <itunes:summary>{xml_escape(summary)}</itunes:summary>
       <itunes:author>{xml_escape(', '.join(authors) or fcfg.get('author', 'Paperpod'))}</itunes:author>
-      <itunes:duration>{_fmt_duration(row['duration_s'])}</itunes:duration>
+      <itunes:explicit>{explicit}</itunes:explicit>
+      <itunes:episodeType>full</itunes:episodeType>
+      <itunes:image href="{base}/static/cover.png"/>{duration}
       <guid isPermaLink="false">{row['id']}</guid>
       <pubDate>{format_datetime(pub)}</pubDate>
       <link>{base}/episode/{row['id']}</link>
@@ -1361,16 +1470,20 @@ def feed():
     <link>{base}/</link>
     <atom:link href="{base}/feed.xml" rel="self" type="application/rss+xml"/>
     <description>{xml_escape(fcfg.get('description', ''))}</description>
-    <language>en-us</language>
+    <language>{xml_escape(fcfg.get('language', 'en-us'))}</language>
+    <copyright>{xml_escape(fcfg.get('copyright', ''))}</copyright>
+    <lastBuildDate>{format_datetime(datetime.now(timezone.utc))}</lastBuildDate>
+    <generator>Paperpod</generator>
     <itunes:author>{xml_escape(fcfg.get('author', 'Paperpod'))}</itunes:author>
     <itunes:summary>{xml_escape(fcfg.get('description', ''))}</itunes:summary>
     <itunes:owner>
       <itunes:name>{xml_escape(scfg.get('owner_name', ''))}</itunes:name>
       <itunes:email>{xml_escape(scfg.get('contact_email', ''))}</itunes:email>
     </itunes:owner>
-    <itunes:explicit>false</itunes:explicit>
+    <itunes:explicit>{explicit}</itunes:explicit>
+    <itunes:type>{xml_escape(fcfg.get('type', 'episodic'))}</itunes:type>
     <itunes:image href="{base}/static/cover.png"/>
-    <itunes:category text="Science"/>
+{category_xml}
 {chr(10).join(items)}
   </channel>
 </rss>
