@@ -35,6 +35,9 @@ def ingest_pdf(path: str | Path, cfg: dict) -> str:
 
     existing = db.find_by_sha(sha)
     if existing:
+        reaccepted = _recheck_rejected(existing, cfg)
+        if reaccepted:
+            return reaccepted
         log.info("skipping %s: duplicate of episode %s", path.name, existing["id"])
         raise DuplicateEpisode(existing["id"])
 
@@ -58,6 +61,47 @@ def ingest_pdf(path: str | Path, cfg: dict) -> str:
     if error:
         raise PipelineError(error)
     return episode_id
+
+
+def _recheck_rejected(existing, cfg: dict) -> str | None:
+    """Re-validate a PDF that was turned away at ingest, and accept it if the
+    rules have since changed. Returns its episode id, or None to leave it be.
+
+    A rejection is a verdict under the limits in force at the time, but it is
+    stored as flat text on the episode. Raise [script] max_pages and every
+    paper refused under the old ceiling keeps quoting that ceiling forever,
+    because re-uploading matches on SHA and never reaches the validator again.
+    The message then reads as a live decision by code that no longer exists,
+    which is a genuinely misleading place to end up.
+
+    Only episodes that never entered the pipeline qualify: an empty stage log
+    is exactly what an ingest-time rejection looks like. A failure at scripting
+    or TTS is a different thing entirely, and quietly restarting one of those
+    from the top would re-spend real money.
+    """
+    if existing["status"] != "failed" or not existing["error"]:
+        return None
+    if db.get_stage_log(existing["id"]):
+        return None
+    pdf = PAPERS_DIR / f"{existing['id']}.pdf"
+    if not pdf.exists():
+        return None
+
+    try:
+        error = _validate(pdf, cfg)
+    except Exception as e:
+        error = f"could not open PDF: {e}"
+    if error:
+        # Still refused -- but refresh the stored reason, so the page states
+        # today's limit rather than one nobody can act on.
+        if error != existing["error"]:
+            db.update_episode(existing["id"], error=error)
+        return None
+
+    log.info("re-accepting episode %s: it passes validation under the current "
+             "limits", existing["id"])
+    db.update_episode(existing["id"], status="queued", error=None)
+    return existing["id"]
 
 
 # How many pages to sample when deciding whether a PDF has a text layer.
