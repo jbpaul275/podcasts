@@ -14,6 +14,8 @@
     {% if admin %}<span class="cost">${{ '%.4f'|format(ep.cost_usd) }} API cost</span>{% endif %}
   </p>
 
+  {% if done %}<p class="flash ok" role="status">{{ done }}</p>{% endif %}
+
   {% if admin and ep.error %}<p class="error">{{ ep.error }}</p>{% endif %}
 
   {% if admin and ep.progress %}
@@ -74,53 +76,6 @@
       at the bottom of the page to rebuild it.</p>
   {% endif %}
 
-  {% if admin and ep.script_md_present %}
-    <details class="rewritebox">
-      <summary>Rewrite the script</summary>
-
-      {% if ep.script_note %}
-        <p class="lastnote">Last rewrite asked for: <q>{{ ep.script_note }}</q></p>
-      {% endif %}
-
-      <form action="/episode/{{ ep.id }}/rewrite" method="post">
-        <label for="rw-notes">What should change?</label>
-        <textarea id="rw-notes" name="instructions" rows="4"
-                  placeholder="Make the part about the instrument shorter, and spend more time on the heterogeneity results in section 5."></textarea>
-        <p class="hint">Plain English. Be specific about what to cut and what to
-          grow — the paper is sent along, so asking for more on a section it
-          covers will actually get you more.</p>
-
-        {% if script_choices|length > 1 %}
-          <label for="rw-model">Model</label>
-          <select id="rw-model" name="script_model">
-            {% for m in script_choices %}
-              <option value="{{ m }}"{{ ' selected' if m == ep.script_model }}>{{ m }}</option>
-            {% endfor %}
-          </select>
-        {% endif %}
-
-        <div class="rwactions">
-          <button type="submit" name="mode" value="revise">Revise this script</button>
-          <button type="submit" name="mode" value="regenerate" class="secondary">Start over from the paper</button>
-        </div>
-        <p class="hint"><strong>Revise</strong> edits what is there, leaving
-          untouched passages intact. <strong>Start over</strong> ignores the
-          current script and writes a fresh one, using your notes as extra
-          direction — use it to try a different model on the same paper.</p>
-        <p class="hint">Either way this runs scripting only and stops, so you can
-          read the result before paying for audio — one script call, a few cents.
-          Re-run from <em>synthesizing</em> at the bottom of the page when the
-          script reads right.</p>
-      </form>
-
-      {% if ep.can_revert_script %}
-        <form action="/episode/{{ ep.id }}/script/revert" method="post" class="revertform">
-          <button type="submit" class="secondary">Undo the last rewrite</button>
-          <span class="hint">One step back only.</span>
-        </form>
-      {% endif %}
-    </details>
-  {% endif %}
 
   {% if admin and lines %}
     <section class="script">
@@ -240,10 +195,59 @@
   {% endif %}
 
   {% if admin %}
-  <section class="ttsbox">
+  <section class="ttsbox" id="scriptmodel">
     <h2>Script model</h2>
     <p><code>{{ ep.script_model }}</code>
-      {% if ep.grounding.sources %}<span class="muted">· grounded in {{ ep.grounding.sources|length }} web source{{ '' if ep.grounding.sources|length == 1 else 's' }}</span>{% endif %}</p>
+      {% if ep.grounding.sources %}<span class="muted">· grounded in {{ ep.grounding.sources|length }} web source{{ '' if ep.grounding.sources|length == 1 else 's' }}</span>{% endif %}
+      {% if ep.script_updated_at %}<br><span class="muted">script written {{ ep.script_updated_at }}</span>{% endif %}</p>
+
+    {% if ep.script_md_present %}
+    <details class="rewritebox">
+      <summary>Rewrite this script</summary>
+
+    {% if ep.script_note %}
+      <p class="lastnote">Last rewrite asked for: <q>{{ ep.script_note }}</q></p>
+    {% endif %}
+
+    <form action="/episode/{{ ep.id }}/rewrite" method="post">
+      <label for="rw-notes">What should change?</label>
+      <textarea id="rw-notes" name="instructions" rows="4"
+                placeholder="Make the part about the instrument shorter, and spend more time on the heterogeneity results in section 5."></textarea>
+      <p class="hint">Plain English. Be specific about what to cut and what to
+        grow — the paper is sent along, so asking for more on a section it
+        covers will actually get you more.</p>
+
+      {% if script_choices|length > 1 %}
+        <label for="rw-model">Model</label>
+        <select id="rw-model" name="script_model">
+          {% for m in script_choices %}
+            <option value="{{ m }}"{{ ' selected' if m == ep.script_model }}>{{ m }}</option>
+          {% endfor %}
+        </select>
+      {% endif %}
+
+      <div class="rwactions">
+        <button type="submit" name="mode" value="revise">Revise this script</button>
+        <button type="submit" name="mode" value="regenerate" class="secondary">Start over from the paper</button>
+      </div>
+      <p class="hint"><strong>Revise</strong> edits what is there, leaving
+        untouched passages intact. <strong>Start over</strong> ignores the
+        current script and writes a fresh one, using your notes as extra
+        direction — use it to try a different model on the same paper.</p>
+      <p class="hint">Either way this runs scripting only and stops, so you can
+        read the result before paying for audio — one script call, a few cents.
+        Re-run from <em>synthesizing</em> at the bottom of the page when the
+        script reads right.</p>
+    </form>
+
+    {% if ep.can_revert_script %}
+      <form action="/episode/{{ ep.id }}/script/revert" method="post" class="revertform">
+        <button type="submit" class="secondary">Undo the last rewrite</button>
+        <span class="hint">One step back only.</span>
+      </form>
+    {% endif %}
+    </details>
+    {% endif %}
   </section>
   {% endif %}
 
@@ -269,7 +273,7 @@
     {% endif %}
   </section>
 
-  <section class="publish {{ 'is-public' if ep.published else '' }}">
+  <section class="publish {{ 'is-public' if ep.published else '' }}" id="visibility">
     <h2>Visibility</h2>
     {% if ep.published %}
       <p>Live on the public site and in the feed.</p>

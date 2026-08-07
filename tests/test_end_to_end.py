@@ -148,7 +148,8 @@ def env(tmp_path, monkeypatch):
     cfg = {
         "models": {"metadata": "m", "script": "s", "tts": "t"},
         "voices": {"host_a": "Puck", "host_b": "Kore"},
-        "script": {"target_words": 1600, "max_pages": 120},
+        "script": {"target_words": 1600, "max_pages": 120,
+                   "models": ["s", "s2"]},
         "tts": {"chunk_target_words": 60, "chunk_max_words": 120, "context_turns": 2},
         "audio": {"seam_silence_ms": 250, "lufs_target": -16.0, "true_peak": -1.5,
                   "lra": 11.0, "bitrate": "96k"},
@@ -2066,6 +2067,15 @@ def test_stage_log_opens_itself_when_something_went_wrong(client, env, tmp_path)
     assert '<details class="stages" open>' in client.get(f"/episode/{episode_id}").text
 # --------------------------------------------------------- stale gap warnings
 
+def _drain_queue():
+    import app as app_mod
+    while not app_mod.WORK_Q.empty():
+        try:
+            app_mod.WORK_Q.get_nowait()
+        except Exception:
+            break
+
+
 def _fake_stage_rows(pairs):
     """(stage, detail) in rowid order, shaped like db.get_stage_log rows."""
     return [{"stage": s, "detail": d} for s, d in pairs]
@@ -2304,7 +2314,7 @@ def test_audio_built_before_the_script_reads_as_stale(client, env, tmp_path):
     assert app_mod._episode_view(db.get_episode(episode_id))["audio_is_stale"] is False
 
     body = client.get(f"/episode/{episode_id}").text
-    assert "Rewrite the script" in body
+    assert "Rewrite this script" in body
 
 
 def test_a_rewrite_survives_a_restart(env, tmp_path):
@@ -2338,3 +2348,74 @@ def test_retry_defaults_to_synthesizing_after_a_rewrite(client, env, tmp_path):
 
     body = client.get(f"/episode/{episode_id}").text
     assert '<option value="synthesizing" selected>' in body
+
+
+# ------------------------------------------- dark mode, feedback, discoverability
+
+def test_buttons_declare_a_text_colour():
+    """Dark mode showed near-black button text on a dark card: the rule set a
+    background but never a colour, so buttons kept the UA default."""
+    css = (Path(__file__).resolve().parents[1] / "static" / "style.css").read_text()
+    rule = css[css.index("button, select, textarea"):]
+    rule = rule[:rule.index("}") + 1]
+    assert "background: var(--card)" in rule
+    assert "color: var(--ink)" in rule, "a background without a colour is the bug"
+
+
+def test_the_script_model_card_carries_the_rewrite_control(client, env, tmp_path):
+    """It sat in a separate box far up the page while the voice-model card had
+    its control inline, so the script model read as unchangeable."""
+    episode_id = _scripted_episode(env, tmp_path, "sm.pdf")
+    body = client.get(f"/episode/{episode_id}").text
+
+    card = body[body.index("Script model"):body.index("Voice model")]
+    assert "Rewrite this script" in card
+    assert f'action="/episode/{episode_id}/rewrite"' in card
+    assert 'name="script_model"' in card, "the model picker has to be in the card"
+
+
+def test_every_admin_action_says_what_it_did(client, env, tmp_path):
+    """Each of these redirects to the top of a long page. Without a message the
+    only evidence is a field further down, which reads as a dead button."""
+    import db
+    import app as app_mod
+
+    episode_id = _scripted_episode(env, tmp_path, "fb.pdf")
+    db.update_episode(episode_id, status="done", flags_reviewed=1)
+
+    cases = [
+        (f"/episode/{episode_id}/publish", {"published": "1"}, "published"),
+        (f"/episode/{episode_id}/publish", {"published": "0"}, "unpublished"),
+        (f"/episode/{episode_id}/edit", {"summary": "A new blurb."}, "edited"),
+        (f"/episode/{episode_id}/retry", {"stage": "synthesizing"}, "retrying"),
+    ]
+    for url, data, key in cases:
+        resp = client.post(url, data=data, follow_redirects=False)
+        assert resp.status_code == 303, url
+        assert f"done={key}" in resp.headers["location"], url
+        # And the message actually renders.
+        body = client.get(f"/episode/{episode_id}?done={key}").text
+        assert app_mod.DONE_MESSAGES[key][0] in body, key
+        db.update_episode(episode_id, status="done")
+        _drain_queue()
+
+
+def test_publishing_lands_you_on_the_visibility_card(client, env, tmp_path):
+    """The change it made is far down the page; the top of the page is not
+    where you can see whether it worked."""
+    import db
+
+    episode_id = _scripted_episode(env, tmp_path, "anch.pdf")
+    db.update_episode(episode_id, status="done", flags_reviewed=1)
+
+    resp = client.post(f"/episode/{episode_id}/publish", data={"published": "1"},
+                       follow_redirects=False)
+    assert resp.headers["location"].endswith("#visibility")
+    assert 'id="visibility"' in client.get(f"/episode/{episode_id}").text
+
+
+def test_an_unknown_done_key_renders_nothing(client, env, tmp_path):
+    """`done` comes from the query string and is rendered on the page."""
+    episode_id = _scripted_episode(env, tmp_path, "dk.pdf")
+    body = client.get(f"/episode/{episode_id}?done=<script>alert(1)</script>").text
+    assert "alert(1)" not in body
