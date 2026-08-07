@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}Not found — {{ feed_title }}{% endblock %}
+{% block content %}
+
+<h1>Not here</h1>
+<p class="muted">{{ detail or 'That page does not exist.' }}</p>
+<p class="muted">If you followed a link to an episode, it may have been deleted.</p>
+<p><a href="/">← Back to {{ feed_title }}</a></p>
+
+{% endblock %}

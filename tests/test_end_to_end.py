@@ -2419,3 +2419,50 @@ def test_an_unknown_done_key_renders_nothing(client, env, tmp_path):
     episode_id = _scripted_episode(env, tmp_path, "dk.pdf")
     body = client.get(f"/episode/{episode_id}?done=<script>alert(1)</script>").text
     assert "alert(1)" not in body
+
+
+# ------------------------------------------------------------ deleting cleanly
+
+def test_deleting_the_episode_you_are_viewing_leaves_the_page(client, env, tmp_path):
+    """Reported: deleting a duplicate showed {"detail":"no such episode"}.
+
+    The delete succeeded. The JS then reloaded the page of the episode it had
+    just deleted, which 404s -- so a working delete read as a failure.
+    """
+    js = (Path(__file__).resolve().parents[1] / "static" / "app.js").read_text()
+    block = js[js.index('.delete-episode'):]
+    block = block[:block.index("});", block.index("fetch("))]
+    assert 'window.location.href = "/admin?deleted=1"' in block
+    assert "window.location.reload()" in block, "the list page still just reloads"
+
+
+def test_the_delete_itself_works(client, env, tmp_path):
+    import db
+    from pipeline import ingest
+
+    pdf = tmp_path / "del.pdf"
+    _make_pdf(pdf)
+    episode_id = ingest.ingest_pdf(pdf, env["cfg"])
+    assert client.delete(f"/episode/{episode_id}").status_code == 200
+    assert db.get_episode(episode_id) is None
+
+
+def test_the_library_confirms_a_delete(client, env):
+    assert "Episode deleted" in client.get("/admin?deleted=1").text
+    assert "Episode deleted" not in client.get("/admin").text
+
+
+def test_a_stale_episode_link_gets_a_page_not_json(client, env):
+    """A deleted episode leaves bookmarks and shared URLs behind."""
+    resp = client.get("/episode/DOESNOTEXIST", headers={"accept": "text/html"})
+    assert resp.status_code == 404
+    assert "text/html" in resp.headers["content-type"]
+    assert "Not here" in resp.text
+    assert '{"detail"' not in resp.text
+
+
+def test_api_clients_still_get_json(client, env):
+    """The delete button checks r.ok, but anything scripted wants JSON."""
+    resp = client.delete("/episode/DOESNOTEXIST", headers={"accept": "application/json"})
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "no such episode"

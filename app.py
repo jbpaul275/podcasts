@@ -29,6 +29,7 @@ from fastapi.responses import (
 )
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 import auth
 import db
@@ -102,6 +103,27 @@ def static_url(name: str) -> str:
 
 
 templates.env.globals["static_url"] = static_url
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_error(request: Request, exc: StarletteHTTPException):
+    """Render 404s as a page for anyone who arrived by clicking a link.
+
+    A deleted episode leaves stale links behind -- bookmarks, the browser's
+    back button, a URL someone shared -- and answering those with a raw JSON
+    body reads as a crash rather than as "that is gone".
+    """
+    wants_html = "text/html" in request.headers.get("accept", "")
+    if exc.status_code == 404 and wants_html:
+        return templates.TemplateResponse(
+            request, "notfound.html",
+            {"detail": exc.detail, "admin": False,
+             "signed_in": auth.is_admin(request),
+             "feed_title": CFG.get("feed", {}).get("title", "Paperpod")},
+            status_code=404,
+        )
+    return JSONResponse({"detail": exc.detail}, status_code=exc.status_code,
+                        headers=getattr(exc, "headers", None))
 
 # Bump when the terms text changes materially.
 TERMS_UPDATED = "6 August 2026"
@@ -673,10 +695,11 @@ def logout():
 
 
 @app.get("/admin", response_class=HTMLResponse)
-def admin(request: Request, error: str = ""):
+def admin(request: Request, error: str = "", deleted: str = ""):
     if not auth.is_admin(request):
         return RedirectResponse("/admin/login", status_code=303)
-    return _render_library(request, admin_mode=True, error=error)
+    return _render_library(request, admin_mode=True, error=error,
+                           deleted=bool(deleted))
 
 
 @app.post("/episode/{episode_id}/edit")
@@ -962,7 +985,8 @@ def library(request: Request):
     return _render_library(request, admin_mode=False)
 
 
-def _render_library(request: Request, admin_mode: bool, error: str = ""):
+def _render_library(request: Request, admin_mode: bool, error: str = "",
+                    deleted: bool = False):
     all_episodes = [
         _episode_view(r) for r in db.list_episodes(published_only=not admin_mode)
     ]
@@ -984,6 +1008,7 @@ def _render_library(request: Request, admin_mode: bool, error: str = ""):
             "queue": [e for e in all_episodes if e["status"] in run.STAGE_NAMES
                       or e["status"] == "queued"],
             "workers": worker_count(),
+            "deleted": deleted,
             "error": error,
             "total_cost": sum(e["cost_usd"] for e in all_episodes),
             "feed_url": CFG["server"]["base_url"].rstrip("/") + "/feed.xml",
