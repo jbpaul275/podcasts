@@ -74,6 +74,10 @@ The public page filters via `?category=<slug>`: real links, so each filter is sh
 
 Renaming a label is free. Changing a slug orphans every episode already tagged with it.
 
+The admin library adds a **Show** row — All / Not published / Published — for reviewing what is not live yet. It is admin-only: the public page contains nothing but published episodes, and `?visibility=private` there is ignored rather than becoming a way to see drafts.
+
+All three controls compose, and each chip's count is taken over what the *other* two leave — so a count always describes what clicking it gives you rather than a library-wide total the page would then contradict.
+
 ### Sorting, and citation counts
 
 The library sorts three ways — newest episodes (the default), the paper's own publication date, and most cited — composable with the category filter and carried in the URL alongside it.

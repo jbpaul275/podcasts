@@ -12,7 +12,7 @@
   <p class="blurb">{{ feed_description }}</p>
 </div>
 
-{% if chips or sorts %}
+{% if chips or sorts or vis_chips %}
 <div class="browsebar">
 {% endif %}
 
@@ -21,9 +21,18 @@
      with the back button. #}
   <nav class="chips" aria-label="Filter by category">
     {% for c in chips %}
-      <a class="chip{{ ' on' if c.selected }}"
-         href="{{ (admin and '/admin' or '/') }}?sort={{ sort }}{{ c.slug and ('&category=' ~ c.slug) or '' }}"
+      <a class="chip{{ ' on' if c.selected }}" href="{{ c.href }}"
          {% if c.selected %}aria-current="true"{% endif %}>{{ c.label }}<span class="chipn">{{ c.count }}</span></a>
+    {% endfor %}
+  </nav>
+{% endif %}
+
+{% if vis_chips %}
+  <nav class="sorts" aria-label="Filter by publication state">
+    <span class="sortlabel">Show</span>
+    {% for v in vis_chips %}
+      <a class="chip{{ ' on' if v.selected }}" href="{{ v.href }}"
+         {% if v.selected %}aria-current="true"{% endif %}>{{ v.label }}<span class="chipn">{{ v.count }}</span></a>
     {% endfor %}
   </nav>
 {% endif %}
@@ -32,14 +41,13 @@
   <nav class="sorts" aria-label="Sort order">
     <span class="sortlabel">Sort</span>
     {% for s in sorts %}
-      <a class="chip{{ ' on' if s.key == sort }}"
-         href="{{ (admin and '/admin' or '/') }}?sort={{ s.key }}{{ category and ('&category=' ~ category) or '' }}"
+      <a class="chip{{ ' on' if s.key == sort }}" href="{{ s.href }}"
          {% if s.key == sort %}aria-current="true"{% endif %}>{{ s.label }}</a>
     {% endfor %}
   </nav>
 {% endif %}
 
-{% if chips or sorts %}
+{% if chips or sorts or vis_chips %}
 </div>
 {% endif %}
 
@@ -77,8 +85,9 @@
 
 {% if not episodes %}
   <p class="empty">
-    {%- if category -%}
-      Nothing under {{ category_label }} yet. <a href="{{ admin and '/admin' or '/' }}">Show everything</a>.
+    {%- if category or visibility -%}
+      Nothing here{% if visibility %} that is {{ visibility_label|lower }}{% endif %}{% if category %} under {{ category_label }}{% endif %}.
+      <a href="{{ admin and '/admin' or '/' }}">Show everything</a>.
     {%- elif not admin -%}
       No episodes published yet.
     {%- elif failed -%}
