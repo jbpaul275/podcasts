@@ -3059,3 +3059,18 @@ def test_an_empty_filter_result_says_so(client, env, tmp_path):
     _vis_paper(env, tmp_path, "only-live.pdf", published=True)
     body = client.get("/admin?visibility=private").text
     assert "Nothing here" in body and "Show everything" in body
+
+
+def test_the_cover_art_meets_both_directories(env):
+    """Artwork is the most common rejection cause, and it is checkable."""
+    import struct
+
+    cover = Path(__file__).resolve().parents[1] / "static" / "cover.png"
+    assert cover.exists()
+    w, h, depth, colour = struct.unpack(">IIBB", cover.read_bytes()[16:26])
+
+    assert w == h, "must be square"
+    assert 1400 <= w <= 3000, f"Apple wants 1400-3000, got {w}"
+    assert w >= 640, "Spotify minimum"
+    assert colour in (2, 6), "RGB, not palette or greyscale"
+    assert cover.stat().st_size < 5 * 1024 * 1024

@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="3000" height="3000" viewBox="0 0 3000 3000">
+  <defs>
+    <linearGradient id="paper" x1="0" y1="0" x2="0.25" y2="1">
+      <stop offset="0" stop-color="#fdfbf5"/>
+      <stop offset="1" stop-color="#ece5d5"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="3000" height="3000" fill="url(#paper)"/>
+    <rect x="300" y="470" width="2208" height="52" rx="26" fill="#c3c8d2"/>
+  <rect x="300" y="602" width="2400" height="52" rx="26" fill="#c3c8d2"/>
+  <rect x="300" y="734" width="1872" height="52" rx="26" fill="#c3c8d2"/>
+  <rect x="300" y="866" width="2304" height="52" rx="26" fill="#c3c8d2"/>
+    <rect x="305" y="1319" width="78" height="363" rx="39.0" fill="#dd8b1f"/>
+  <rect x="441" y="1250" width="78" height="500" rx="39.0" fill="#dd8b1f"/>
+  <rect x="577" y="1176" width="78" height="647" rx="39.0" fill="#dd8b1f"/>
+  <rect x="713" y="1214" width="78" height="573" rx="39.0" fill="#dd8b1f"/>
+  <rect x="849" y="1190" width="78" height="620" rx="39.0" fill="#dd8b1f"/>
+  <rect x="985" y="1161" width="78" height="677" rx="39.0" fill="#dd8b1f"/>
+  <rect x="1121" y="1210" width="78" height="579" rx="39.0" fill="#dd8b1f"/>
+  <rect x="1257" y="1144" width="78" height="711" rx="39.0" fill="#dd8b1f"/>
+  <rect x="1393" y="1111" width="78" height="778" rx="39.0" fill="#dd8b1f"/>
+  <rect x="1529" y="1083" width="78" height="834" rx="39.0" fill="#dd8b1f"/>
+  <rect x="1665" y="1214" width="78" height="573" rx="39.0" fill="#dd8b1f"/>
+  <rect x="1801" y="1191" width="78" height="617" rx="39.0" fill="#dd8b1f"/>
+  <rect x="1937" y="1237" width="78" height="526" rx="39.0" fill="#dd8b1f"/>
+  <rect x="2073" y="1146" width="78" height="708" rx="39.0" fill="#dd8b1f"/>
+  <rect x="2209" y="1183" width="78" height="635" rx="39.0" fill="#dd8b1f"/>
+  <rect x="2345" y="1288" width="78" height="424" rx="39.0" fill="#dd8b1f"/>
+  <rect x="2481" y="1202" width="78" height="596" rx="39.0" fill="#dd8b1f"/>
+  <rect x="2617" y="1274" width="78" height="452" rx="39.0" fill="#dd8b1f"/>
+
+  <text x="1500.0" y="2360" text-anchor="middle"
+        font-family="Liberation Sans, Helvetica, Arial, sans-serif"
+        font-weight="700" font-size="470" letter-spacing="-18" fill="#16181d">PAPERPOD</text>
+  <rect x="300" y="2530" width="2400" height="14" rx="7" fill="#16181d" opacity="0.22"/>
+  <text x="1500.0" y="2740" text-anchor="middle"
+        font-family="Liberation Sans, Helvetica, Arial, sans-serif"
+        font-weight="700" font-size="96" letter-spacing="10" fill="#6f6a5e">DIFFICULT PAPERS, EXPLAINED SIMPLY</text>
+</svg>
