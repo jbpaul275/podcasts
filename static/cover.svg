@@ -36,5 +36,5 @@
   <rect x="300" y="2530" width="2400" height="14" rx="7" fill="#16181d" opacity="0.22"/>
   <text x="1500.0" y="2740" text-anchor="middle"
         font-family="Liberation Sans, Helvetica, Arial, sans-serif"
-        font-weight="700" font-size="112" letter-spacing="22" fill="#6f6a5e">PAPERS, READ ALOUD</text>
+        font-weight="700" font-size="96" letter-spacing="10" fill="#6f6a5e">DIFFICULT PAPERS, EXPLAINED SIMPLY</text>
 </svg>
