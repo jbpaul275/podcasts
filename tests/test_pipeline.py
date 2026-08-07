@@ -4,6 +4,7 @@ citation flagging, WAV wrapping, range requests, feed generation, resume.
 Nothing here calls the Gemini API.
 """
 
+import json
 import os
 import sys
 import wave
@@ -617,7 +618,10 @@ def test_completed_chunks_are_skipped_on_resume(tmp_path, monkeypatch):
         wav_path.write_bytes(b"\x00" * 100)
 
     monkeypatch.setattr(tts, "_synthesize_chunk", fake_synth)
-    cfg = {"tts": {"chunk_target_words": 120, "chunk_max_words": 200, "context_turns": 2}}
+    # Intro off: this is about chunk resumability, and the intro is a
+    # separate single-voice call that would need its own stub.
+    cfg = {"tts": {"chunk_target_words": 120, "chunk_max_words": 200, "context_turns": 2},
+           "intro": {"enabled": False}}
 
     tts.synthesize("EP1", cfg)
     first_pass = list(calls)
@@ -642,7 +646,8 @@ def test_chunk_prompt_includes_context_but_only_synthesizes_current(tmp_path, mo
         tts, "_synthesize_chunk",
         lambda eid, entry, path, cfg: (entries.append(entry), path.write_bytes(b"\x00" * 100)),
     )
-    tts.synthesize("EP1", {"tts": {"chunk_target_words": 3, "chunk_max_words": 6, "context_turns": 2}})
+    tts.synthesize("EP1", {"tts": {"chunk_target_words": 3, "chunk_max_words": 6, "context_turns": 2},
+                           "intro": {"enabled": False}})
 
     later = entries[2]
     assert later["context"], "later chunks get preceding turns for prosody"
@@ -1174,3 +1179,169 @@ def test_citations_can_be_switched_off(_isolated_db, monkeypatch):
     monkeypatch.setattr(citations, "lookup", lambda *a, **k: called.append(1) or (9, "x"))
     assert ingest.refresh_citations("ECITE2", {"citations": {"enabled": False}}) is None
     assert not called
+
+
+# ------------------------------------------------------- spoken AI disclosure
+
+def _intro_cfg(**over):
+    cfg = {
+        "models": {"tts": "t"},
+        "voices": {"host_a": "Puck", "host_b": "Kore"},
+        "intro": {"enabled": True, "voice": "Charon"},
+    }
+    cfg["intro"].update(over)
+    return cfg
+
+
+def test_intro_names_the_paper_and_says_it_is_ai_generated(_isolated_db):
+    """Apple wants the disclosure in the audio itself, not only the metadata."""
+    import db
+    from pipeline import intro
+
+    db.create_episode("EINTRO", "/tmp/i.pdf", "sha-intro")
+    db.update_episode("EINTRO", title="Minimum Wages and Employment",
+                      authors=json.dumps(["David Card", "Alan Krueger"]))
+
+    text = intro.intro_text(db.get_episode("EINTRO"), _intro_cfg())
+    assert "AI generated" in text
+    assert "Minimum Wages and Employment" in text
+    assert "David Card and Alan Krueger" in text
+
+
+def test_intro_is_off_when_switched_off(_isolated_db):
+    import db
+    from pipeline import intro
+
+    db.create_episode("EINTRO2", "/tmp/i.pdf", "sha-intro2")
+    assert intro.intro_text(db.get_episode("EINTRO2"), _intro_cfg(enabled=False)) is None
+
+
+def test_intro_does_not_announce_an_uncredited_author(_isolated_db):
+    """"by an uncredited author" is fine to read on a page and absurd to hear."""
+    import db
+    from pipeline import intro
+
+    db.create_episode("EINTRO3", "/tmp/i.pdf", "sha-intro3")
+    db.update_episode("EINTRO3", title="A Paper With No Byline")
+
+    text = intro.intro_text(db.get_episode("EINTRO3"), _intro_cfg())
+    assert "uncredited" not in text
+    assert text.endswith("A Paper With No Byline.")
+
+
+def test_intro_does_not_double_the_full_stop_after_et_al(_isolated_db):
+    import db
+    from pipeline import intro
+
+    db.create_episode("EINTRO4", "/tmp/i.pdf", "sha-intro4")
+    db.update_episode("EINTRO4", title="Attention Is All You Need",
+                      authors=json.dumps(["A", "B", "C", "D", "E"]))
+
+    text = intro.intro_text(db.get_episode("EINTRO4"), _intro_cfg())
+    assert text.endswith("by A et al.")
+    assert ".." not in text
+
+
+def test_intro_uses_one_voice_that_is_neither_host(_isolated_db, monkeypatch):
+    """The multi-speaker API takes exactly two speakers, so a third voice has
+    to come from a separate single-voice call."""
+    import db
+    from pipeline import intro
+
+    db.create_episode("EINTRO5", "/tmp/i.pdf", "sha-intro5")
+    db.update_episode("EINTRO5", title="A Paper", authors=json.dumps(["Solo"]))
+    monkeypatch.setattr(intro, "CHUNKS_DIR", tmp_chunks())
+
+    captured = {}
+
+    class FakeModels:
+        def generate_content(self, model=None, contents=None, config=None):
+            captured["model"] = model
+            captured["speech"] = config.speech_config
+            captured["contents"] = contents
+            return _audio_response()
+
+    monkeypatch.setattr(intro, "client",
+                        lambda: type("C", (), {"models": FakeModels()})())
+
+    cfg = _intro_cfg()
+    cfg["retry"] = {"attempts": 2, "base_delay_s": 0, "max_delay_s": 0}
+    intro.synthesize_intro("EINTRO5", cfg)
+
+    speech = captured["speech"]
+    assert speech.multi_speaker_voice_config is None, (
+        "a third voice cannot be added to the two-host call"
+    )
+    assert speech.voice_config.prebuilt_voice_config.voice_name == "Charon"
+    assert speech.voice_config.prebuilt_voice_config.voice_name not in (
+        cfg["voices"]["host_a"], cfg["voices"]["host_b"]
+    ), "an announcer in a host's voice does not read as a handoff"
+    assert "This is a Paperpod" in captured["contents"]
+    assert intro.wav_path("EINTRO5").exists()
+
+
+def _audio_response():
+    """The shape the SDK returns for an audio generation."""
+    from types import SimpleNamespace
+
+    part = SimpleNamespace(inline_data=SimpleNamespace(
+        data=b"\x00\x01" * 100, mime_type="audio/L16;codec=pcm;rate=24000"))
+    return SimpleNamespace(
+        candidates=[SimpleNamespace(content=SimpleNamespace(parts=[part]))],
+        usage_metadata=None,
+        model_version=None,
+    )
+
+
+def tmp_chunks():
+    """A throwaway chunk directory; the intro writes its WAV there."""
+    import tempfile
+    return Path(tempfile.mkdtemp())
+
+
+def test_intro_is_resynthesized_only_when_its_words_change(_isolated_db, monkeypatch):
+    """Editing a title changes what the disclosure says, and nothing in the
+    audio reveals that it is out of date."""
+    import db
+    from pipeline import intro
+
+    db.create_episode("EINTRO6", "/tmp/i.pdf", "sha-intro6")
+    db.update_episode("EINTRO6", title="First Title", authors=json.dumps(["Solo"]))
+    monkeypatch.setattr(intro, "CHUNKS_DIR", tmp_chunks())
+
+    calls = []
+
+    def fake_synth(episode_id, text, wav, cfg):
+        calls.append(text)
+        wav.write_bytes(b"\x00" * 200)
+
+    monkeypatch.setattr(intro, "_synthesize", fake_synth)
+
+    intro.synthesize_intro("EINTRO6", _intro_cfg())
+    assert len(calls) == 1
+    intro.synthesize_intro("EINTRO6", _intro_cfg())
+    assert len(calls) == 1, "unchanged wording must reuse the WAV on disk"
+
+    db.update_episode("EINTRO6", title="Second Title")
+    intro.synthesize_intro("EINTRO6", _intro_cfg())
+    assert len(calls) == 2
+    assert "Second Title" in calls[1]
+    assert intro.recorded_text("EINTRO6") == calls[1]
+
+
+def test_shipped_intro_template_reads_as_a_sentence(_isolated_db):
+    """The wording in config.toml is what listeners actually hear, so it is
+    worth asserting on rather than only the module default."""
+    import db
+    from config import load_config
+    from pipeline import intro
+
+    db.create_episode("EINTRO7", "/tmp/i.pdf", "sha-intro7")
+    db.update_episode("EINTRO7", title="Some Important Paper",
+                      authors=json.dumps(["Ada Lovelace"]))
+
+    cfg = load_config()
+    text = intro.intro_text(db.get_episode("EINTRO7"), cfg)
+    assert text.startswith("This is a Paperpod, an AI generated podcast")
+    assert text.endswith("Today's episode is about Some Important Paper, by Ada Lovelace.")
+    assert "$" not in text, "every placeholder must have been substituted"

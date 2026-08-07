@@ -14,8 +14,8 @@ PDF → ingest → script → TTS → assemble → MP3
 |---|---|
 | `ingest` | SHA-256 dedupe, size/page/text-layer validation, copy into `data/papers/`, native-PDF metadata extraction |
 | `script` | Sends the PDF natively (so tables and figures survive) and returns speaker-tagged dialogue |
-| `tts` | Chunks the script on speaker-turn boundaries, synthesizes each chunk with two-speaker TTS |
-| `assemble` | ffmpeg concat with seam silence, two-pass loudness normalization, 96k mono MP3 with ID3 tags |
+| `tts` | Records the spoken AI disclosure in its own voice, then chunks the script on speaker-turn boundaries and synthesizes each chunk with two-speaker TTS |
+| `assemble` | ffmpeg concat with seam silence, disclosure first, two-pass loudness normalization, 96k mono MP3 with ID3 tags |
 
 Every stage writes its output to disk and its status to SQLite before the next one starts, so a crash is resumable from the last completed stage. TTS in particular resumes at the chunk level — killing the process mid-synthesis and restarting will not regenerate the script.
 
@@ -119,6 +119,26 @@ Two things that are easy to get wrong and produce an unhelpful rejection:
 - **Artwork must be square, 1400×1400 to 3000×3000.** This is the most common rejection. `static/cover.png` ships at 1400×1400.
 - **`itunes:category` must be spelled exactly as in Apple's list.** The readiness check holds the list and rejects anything else.
 
+### The AI disclosure
+
+Apple requires machine-generated audio to be disclosed in the show metadata, in every episode's metadata, **and in the content itself**. All three are covered:
+
+| Where | What carries it |
+| --- | --- |
+| Show metadata | `[feed] description` |
+| Episode metadata | the attribution line, which leads every `<description>` and `<itunes:summary>` |
+| The audio | `[intro]` — a spoken sentence at the top of every episode |
+
+The spoken one is `pipeline/intro.py`. Three things about it are deliberate:
+
+- **The wording is a template, not model output.** A compliance statement a model paraphrases is one that can drift, and nothing downstream would notice. `$TITLE` and `$AUTHORS` are the only variable parts.
+- **It is a separate single-voice call.** The multi-speaker API takes *exactly two* speaker configs — "Exactly two speaker voice configurations must be provided" — so a third voice cannot come from the same call as the hosts. The intro is synthesized on its own with `[intro] voice`, and assembly puts it in front of the dialogue with the usual seam silence. Pick a voice that is neither host or the handoff does not read as one.
+- **It is `intro.wav`, not a numbered chunk.** The gap detection that spots a truncated episode counts `NNN.wav` against the manifest; a chunk that is not dialogue would confuse it.
+
+The rendered sentence is stored beside the WAV as `intro.txt`. Editing a paper's title or authors changes the sentence, and the episode page then says the audio announces the old wording — nothing in the audio itself would reveal that. Retrying from **synthesizing** re-records only the intro; the dialogue chunks on disk are reused.
+
+Episodes built before this existed have no intro and say so on their page. `[intro] enabled = false` switches the whole thing off, which is a directory-compliance decision rather than a style one.
+
 The enclosure URL answers `HEAD` as well as `GET`. Both directories probe it before accepting a feed, and FastAPI's `@app.get` alone returns 405 — which reads to them as a broken media URL rather than a missing method.
 
 A missing duration omits `itunes:duration` rather than emitting the `--:--` the web UI uses for "unknown", which is not a duration and fails validation.
@@ -147,6 +167,7 @@ All knobs live in `config.toml`, loaded once at startup.
 
 - `[models]` — model IDs for metadata extraction, scripting, and TTS.
 - `[voices]` — the two prebuilt voice IDs. Two speakers is the documented maximum; do not add a third host.
+- `[intro]` — the spoken AI disclosure that opens every episode. See below.
 - `[script]` — the content-quality knobs:
   - `target_words` (1600 ≈ ten minutes).
   - `max_pages` — an editorial limit, not a technical one. The API stops at 1000 pages and 50 MB per PDF; each page costs ~258 input tokens and the PDF is sent on both the metadata and the script call. 400 pages is ~103k tokens per call and stays under the 200k mark where Pro's input rate doubles.
@@ -235,9 +256,11 @@ The two text-model prices in `[costs]` are still estimates — correct them agai
 config.toml          config, loaded once at startup
 app.py               FastAPI routes, background worker, inbox watcher
 db.py                schema + queries (sqlite3 stdlib, no ORM)
+prose.py             paper metadata rendered as English, shared by web + pipeline
 pipeline/
   ingest.py          PDF in, metadata + validation out
   script.py          paper in, dialogue script out, citation flagging
+  intro.py           the spoken AI disclosure, in its own voice
   tts.py             script in, audio chunks out
   assemble.py        chunks in, normalized MP3 out
   run.py             orchestrator, stage state machine

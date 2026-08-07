@@ -51,7 +51,16 @@ from config import (
     reset_prompt,
     save_prompt,
 )
-from pipeline import DuplicateEpisode, PipelineError, gemini, ingest, run, script as script_mod
+from pipeline import (
+    DuplicateEpisode,
+    PipelineError,
+    gemini,
+    ingest,
+    intro as intro_mod,
+    run,
+    script as script_mod,
+)
+from prose import author_credit as _author_credit, decaps as _decaps
 
 logging.basicConfig(
     level=logging.INFO,
@@ -325,6 +334,25 @@ def _audio_is_stale(row) -> bool:
     return written > built
 
 
+def _intro_view(row) -> dict | None:
+    """The spoken AI disclosure: what it will say, and whether the audio on
+    disk still says it. Editing a paper's title or authors changes the wording,
+    and there is nothing in the audio itself to reveal that it is out of date.
+    """
+    text = intro_mod.intro_text(row, CFG)
+    if not text:
+        return None
+    recorded = intro_mod.recorded_text(row["id"])
+    has_audio = bool(row["audio_path"] and Path(row["audio_path"]).exists())
+    return {
+        "text": text,
+        "recorded": recorded,
+        # Nothing to be stale against until an episode has been built.
+        "stale": has_audio and recorded != text,
+        "missing": has_audio and recorded is None,
+    }
+
+
 def _progress(row) -> dict | None:
     """What a running episode is doing, and whether it is still moving."""
     if row["status"] not in run.STAGE_NAMES:
@@ -343,46 +371,6 @@ def _progress(row) -> dict | None:
         "idle": _fmt_duration(since) if since else None,
         "stalled": since is not None and since > STALL_AFTER_S,
     }
-
-
-_SMALL_WORDS = {"a", "an", "and", "as", "at", "but", "by", "for", "from", "in",
-                "nor", "of", "on", "or", "the", "to", "via", "with"}
-
-# Acronyms that must survive title-casing an all-caps string. Without these,
-# "NBER WORKING PAPER SERIES" reads back as "Nber Working Paper Series".
-_ACRONYMS = {
-    "NBER", "IZA", "CEPR", "SSRN", "IMF", "OECD", "ECB", "BLS", "BEA", "IRS",
-    "FDA", "EPA", "CDC", "WHO", "UN", "EU", "US", "USA", "UK", "MIT", "UCLA",
-    "NYU", "LSE", "AER", "QJE", "JPE", "JEL", "PNAS", "GDP", "GNP", "CPI",
-    "RCT", "RCTS", "OLS", "IV", "GMM", "AI", "ML", "LLM", "COVID", "HIV",
-    "CEO", "CFO", "GPS", "STEM", "PISA", "NAEP", "SAT", "GED", "K-12",
-}
-
-
-def _decaps(text: str) -> str:
-    """NBER and many journals print titles in all caps. Left alone they shout
-    on the page, so title-case them — but only when they really are all caps,
-    so deliberate capitalization (RCT, GDP) in mixed-case titles survives."""
-    if not text or not text.isupper():
-        return text
-    out = []
-    for i, raw in enumerate(text.split()):
-        if raw.strip(".,:;()").upper() in _ACRONYMS:
-            out.append(raw)          # already correctly capitalized
-            continue
-        w = raw.lower()
-        out.append(w if (w in _SMALL_WORDS and i) else w[:1].upper() + w[1:])
-    return " ".join(out)
-
-
-def _author_credit(authors: list[str], max_named: int = 3) -> str:
-    if not authors:
-        return "an uncredited author"
-    if len(authors) > max_named:
-        return f"{authors[0]} et al."
-    if len(authors) == 1:
-        return authors[0]
-    return ", ".join(authors[:-1]) + " and " + authors[-1]
 
 
 def _attribution(paper_title: str | None, authors: list[str]) -> str:
@@ -408,6 +396,7 @@ _COST_STAGE_LABELS = {
     "metadata": "Metadata extraction",
     "script": "Script generation",
     "title": "Episode title",
+    "intro": "Spoken disclosure",
     "tts": "Speech synthesis",
     "other": "Other",
 }
@@ -1193,6 +1182,7 @@ def episode_page(request: Request, episode_id: str, done: str = ""):
             "script_choices": script_choices(),
             "all_categories": categories(CFG),
             "versions": versions,
+            "intro": _intro_view(row) if admin_mode else None,
         },
     )
 
@@ -1385,6 +1375,27 @@ def feed_readiness() -> list[dict]:
     else:
         bad(f"Category “{cat}” is not one Apple recognises. Pick from: "
             + ", ".join(sorted(APPLE_CATEGORIES)))
+
+    # Apple wants AI disclosed in the show metadata, in each episode's
+    # metadata, and in the audio. The first two are the feed description and
+    # the attribution line; this is the third, and it is the one that can be
+    # silently absent — an episode built before the disclosure existed, or one
+    # whose title was edited afterwards, sounds fine and is still wrong.
+    if intro_mod.enabled(CFG):
+        undisclosed = [r["id"] for r in live
+                       if intro_mod.recorded_text(r["id"]) != intro_mod.intro_text(r, CFG)]
+        if undisclosed:
+            bad(f"{len(undisclosed)} published episode(s) do not open with the "
+                "current spoken AI disclosure. Apple requires it in the audio "
+                "itself, not only the metadata. Retry those from synthesizing — "
+                "the dialogue is already on disk.")
+        else:
+            good("Every published episode opens with the spoken AI disclosure")
+    else:
+        out.append({"ok": None, "text":
+                    "[intro] is switched off, so the audio carries no AI "
+                    "disclosure. Apple requires one when the audio is machine "
+                    "generated."})
 
     missing_dur = [r["id"] for r in live if not r["duration_s"]]
     if missing_dur:

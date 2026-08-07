@@ -15,6 +15,27 @@ tts      = "gemini-3.1-flash-tts-preview"
 host_a = "Puck"
 host_b = "Kore"
 
+# The spoken AI disclosure at the top of every episode. Apple requires the
+# disclosure in the show metadata, in each episode's metadata, and in the
+# content itself; this is the third of those. Turning it off is a directory
+# compliance decision, not a style one.
+#
+# The wording is fixed here rather than written by the script model: a
+# statement a model paraphrases is one that can quietly drift.
+#
+# It is synthesized in its own single-voice call, because the multi-speaker
+# API takes exactly two speakers -- a third voice cannot come from the same
+# call as the hosts. Pick a voice that is not host_a or host_b, or the handoff
+# does not read as one.
+[intro]
+enabled = true
+voice   = "Charon"
+# $TITLE is the paper's title, $AUTHORS its credit ("Smith and Jones",
+# "Smith et al."). The no-authors variant is used when the paper's authorship
+# could not be established, so nobody is announced as "an uncredited author".
+template            = "This is a Paperpod, an AI generated podcast with discussions of important academic papers. Today's episode is about $TITLE, by $AUTHORS."
+template_no_authors = "This is a Paperpod, an AI generated podcast with discussions of important academic papers. Today's episode is about $TITLE."
+
 [script]
 target_words = 1600
 # The API stops at 1000 pages / 50 MB per PDF, so this is an editorial limit,
