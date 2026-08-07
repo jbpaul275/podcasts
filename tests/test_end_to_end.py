@@ -535,7 +535,7 @@ def client(env, tmp_path, monkeypatch):
     monkeypatch.setattr(app_mod, "FINAL_DIR", env["final"])
     monkeypatch.setattr(app_mod, "PAPERS_DIR", env["papers"])
     monkeypatch.setattr(app_mod, "CHUNKS_DIR", env["chunks"])
-    monkeypatch.setattr(app_mod, "_worker", lambda: None)
+    monkeypatch.setattr(app_mod, "_worker", lambda *a: None)
     monkeypatch.setattr(app_mod, "_watch_inbox", lambda: None)
     with TestClient(app_mod.app) as c:
         yield c
@@ -580,6 +580,63 @@ def test_favicon_is_declared(client):
 def test_health_route(client):
     body = client.get("/health").json()
     assert "queue_depth" in body and "worker_alive" in body
+    # worker_current went from a single id to a list when workers became
+    # concurrent; the health line checks its length, so it must stay a list.
+    assert isinstance(body["worker_current"], list)
+    assert body["workers"] >= 1
+
+
+def test_an_episode_cannot_be_claimed_twice(env):
+    """Two workers pulling the same id must not both run it.
+
+    Without this, a retry on an already-running episode would put two threads
+    on the same chunk WAVs and DB rows.
+    """
+    import app as app_mod
+
+    app_mod._INFLIGHT.clear()
+    try:
+        assert app_mod._claim("EP1") is True
+        assert app_mod._claim("EP1") is False   # the duplicate is refused
+        assert app_mod._claim("EP2") is True    # a different episode is not
+        app_mod._release("EP1")
+        assert app_mod._claim("EP1") is True    # claimable again once done
+    finally:
+        app_mod._INFLIGHT.clear()
+
+
+def test_workers_run_episodes_concurrently(env, monkeypatch):
+    """Two queued episodes should overlap, not run one after the other."""
+    import threading
+    import app as app_mod
+
+    started = threading.Barrier(2, timeout=5)
+    done = threading.Event()
+
+    def fake_run(episode_id, cfg, from_stage=None):
+        started.wait()      # deadlocks unless a second worker is running
+        done.set()
+
+    monkeypatch.setattr(app_mod.run, "run_episode", fake_run)
+
+    app_mod._INFLIGHT.clear()
+    threads = [
+        threading.Thread(target=app_mod._worker, args=(f"w{i}",), daemon=True)
+        for i in range(2)
+    ]
+    for t in threads:
+        t.start()
+    try:
+        app_mod.WORK_Q.put(("A", None))
+        app_mod.WORK_Q.put(("B", None))
+        assert done.wait(timeout=5), "episodes did not overlap"
+    finally:
+        # Stop them, or they linger and steal work from later tests.
+        for _ in threads:
+            app_mod.WORK_Q.put((None, None))
+        for t in threads:
+            t.join(timeout=5)
+        app_mod._INFLIGHT.clear()
 
 
 def _publish(episode_id):
@@ -957,7 +1014,7 @@ def public_client(env, tmp_path, monkeypatch):
     monkeypatch.setattr(app_mod, "FINAL_DIR", env["final"])
     monkeypatch.setattr(app_mod, "PAPERS_DIR", env["papers"])
     monkeypatch.setattr(app_mod, "CHUNKS_DIR", env["chunks"])
-    monkeypatch.setattr(app_mod, "_worker", lambda: None)
+    monkeypatch.setattr(app_mod, "_worker", lambda *a: None)
     monkeypatch.setattr(app_mod, "_watch_inbox", lambda: None)
     with TestClient(app_mod.app) as c:
         yield c
@@ -1805,3 +1862,57 @@ def test_script_fails_when_there_is_no_fallback(env, tmp_path, monkeypatch):
 
     with pytest.raises(QuotaUnavailable):
         _REAL_GENERATE_SCRIPT(eid, cfg)
+
+
+def test_a_running_episode_shows_its_progress(env, monkeypatch):
+    """"synthesizing" alone cannot tell you whether it is still moving."""
+    import db
+    import app as app_mod
+
+    db.create_episode("EPROG", "/tmp/x.pdf", "sha-prog", status="synthesizing")
+    db.set_progress("EPROG", "synthesizing chunk 3 of 12")
+
+    view = app_mod._episode_view(db.get_episode("EPROG"))
+    assert view["progress"]["note"] == "synthesizing chunk 3 of 12"
+    assert view["progress"]["stalled"] is False
+
+
+def test_a_wedged_episode_reads_as_stalled(env, monkeypatch):
+    import db
+    import app as app_mod
+    from datetime import datetime, timedelta, timezone
+
+    db.create_episode("ESTALL", "/tmp/y.pdf", "sha-stall", status="synthesizing")
+    long_ago = (datetime.now(timezone.utc)
+                - timedelta(seconds=app_mod.STALL_AFTER_S + 60)).isoformat()
+    db.update_episode("ESTALL", progress="synthesizing chunk 3 of 12",
+                      progress_at=long_ago)
+
+    view = app_mod._episode_view(db.get_episode("ESTALL"))
+    assert view["progress"]["stalled"] is True
+
+
+def test_a_finished_episode_shows_no_progress(env):
+    import db
+    import app as app_mod
+
+    db.create_episode("EDONE2", "/tmp/z.pdf", "sha-done2", status="done")
+    assert app_mod._episode_view(db.get_episode("EDONE2"))["progress"] is None
+
+
+def test_progress_reaches_the_admin_pages(client, env):
+    """The whole point is seeing a stall without SSHing into the box."""
+    import db
+    from datetime import datetime, timedelta, timezone
+    import app as app_mod
+
+    db.create_episode("ESHOW", "/tmp/s.pdf", "sha-show", status="synthesizing")
+    stale = (datetime.now(timezone.utc)
+             - timedelta(seconds=app_mod.STALL_AFTER_S + 60)).isoformat()
+    db.update_episode("ESHOW", title="A Paper",
+                      progress="synthesizing chunk 3 of 12", progress_at=stale)
+
+    for url in ("/admin", "/episode/ESHOW"):
+        body = client.get(url).text
+        assert "chunk 3 of 12" in body, url
+        assert "stalled" in body, url

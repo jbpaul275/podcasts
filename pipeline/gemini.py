@@ -13,6 +13,22 @@ log = logging.getLogger("paperpod.gemini")
 
 _client = None
 
+# Ceiling on a single API call. Without one, a stalled connection blocks the
+# worker thread forever: the episode sits in "synthesizing" with no error and
+# nothing behind it in the queue ever starts. A TTS chunk is ~250 words and
+# normally answers in well under a minute, so ten minutes is generous.
+DEFAULT_TIMEOUT_S = 600
+_timeout_s = DEFAULT_TIMEOUT_S
+
+
+def configure(cfg: dict) -> None:
+    """Apply config before anything builds the client. Called once at startup."""
+    global _timeout_s
+    if _client is not None:
+        return  # already built; the timeout is baked into the transport
+    _timeout_s = float(cfg.get("retry", {}).get(
+        "request_timeout_s", DEFAULT_TIMEOUT_S))
+
 # Transient by nature: rate limits, and the server-side failures Gemini returns
 # intermittently. Anything else (bad request, auth, unknown model) will fail the
 # same way on every attempt, so retrying only wastes wall-clock.
@@ -28,7 +44,10 @@ def client():
         if not os.environ.get("GEMINI_API_KEY"):
             raise PipelineError("GEMINI_API_KEY is not set in the environment")
         from google import genai
-        _client = genai.Client()  # reads GEMINI_API_KEY
+        from google.genai import types
+        _client = genai.Client(  # reads GEMINI_API_KEY
+            http_options=types.HttpOptions(timeout=int(_timeout_s * 1000)),
+        )
     return _client
 
 
@@ -70,7 +89,16 @@ def quota_is_unavailable(exc) -> bool:
     return bool(re.search(r"limit:\s*0\b", blob + " " + str(exc)))
 
 
+def is_timeout(exc) -> bool:
+    """A request that ran past its deadline, by any name the transport uses."""
+    return "timeout" in type(exc).__name__.casefold()
+
+
 def is_retryable(exc) -> bool:
+    # A timeout is the most transient failure there is -- one stalled
+    # connection should cost a retry, not the whole chunk.
+    if is_timeout(exc):
+        return True
     code = getattr(exc, "code", None)
     return isinstance(code, int) and code in RETRYABLE_CODES
 

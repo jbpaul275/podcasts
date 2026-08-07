@@ -1,7 +1,7 @@
 """Paperpod: FastAPI app, background worker, inbox watcher.
 
-Concurrency is deliberately trivial: one worker thread draining an in-process
-queue. No Celery, no Redis, no websockets. The UI polls.
+Concurrency is deliberately trivial: a small pool of worker threads draining
+one in-process queue. No Celery, no Redis, no websockets. The UI polls.
 """
 
 import json
@@ -41,7 +41,7 @@ from config import (
     ROOT,
     load_config,
 )
-from pipeline import DuplicateEpisode, PipelineError, ingest, run, script as script_mod
+from pipeline import DuplicateEpisode, PipelineError, gemini, ingest, run, script as script_mod
 
 logging.basicConfig(
     level=logging.INFO,
@@ -56,10 +56,15 @@ CFG = load_config()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init_db()
+    gemini.configure(CFG)
     _requeue_interrupted()
-    threading.Thread(target=_worker, daemon=True, name="paperpod-worker").start()
+    for i in range(worker_count()):
+        name = f"paperpod-worker-{i + 1}"
+        threading.Thread(target=_worker, args=(name,), daemon=True,
+                         name=name).start()
     threading.Thread(target=_watch_inbox, daemon=True, name="paperpod-watcher").start()
-    log.info("paperpod up; base_url=%s", CFG["server"]["base_url"])
+    log.info("paperpod up; base_url=%s workers=%d",
+             CFG["server"]["base_url"], worker_count())
     unpriced = [m for m in tts_choices() if m not in CFG.get("costs", {})]
     if unpriced:
         log.warning(
@@ -95,29 +100,80 @@ templates.env.globals["static_url"] = static_url
 TERMS_UPDATED = "6 August 2026"
 
 WORK_Q: "queue.Queue[tuple[str, str | None]]" = queue.Queue()
-WORKER_STATE = {"alive": False, "current": None, "last_beat": None}
+
+# One entry per worker thread, so /health can show what each is doing.
+WORKER_STATE: dict[str, dict] = {}
+
+# Episodes currently being processed. With more than one worker, the same id
+# can be queued twice -- retry while it is already running, or the inbox
+# watcher racing an upload -- and two threads on one episode would write the
+# same chunk WAVs and DB rows over each other. The claim makes the second one
+# a no-op instead.
+_INFLIGHT: set[str] = set()
+_INFLIGHT_LOCK = threading.Lock()
+
+
+def worker_count() -> int:
+    """How many episodes to process at once.
+
+    Not an API limit: the pipeline is almost entirely waiting on Gemini, so
+    concurrency is nearly free in CPU terms. The ceiling is the account's
+    requests-per-minute and the volume's disk headroom during assembly, which
+    is why this is config rather than a large fixed number.
+    """
+    return max(1, int(CFG.get("server", {}).get("workers", 1)))
+
+
+def _claim(episode_id: str) -> bool:
+    with _INFLIGHT_LOCK:
+        if episode_id in _INFLIGHT:
+            return False
+        _INFLIGHT.add(episode_id)
+        return True
+
+
+def _release(episode_id: str) -> None:
+    with _INFLIGHT_LOCK:
+        _INFLIGHT.discard(episode_id)
 
 
 # --------------------------------------------------------------------------
 # worker + watcher
 # --------------------------------------------------------------------------
 
-def _worker() -> None:
+def _worker(name: str = "worker") -> None:
     db.init_db()
-    WORKER_STATE["alive"] = True
+    state = WORKER_STATE.setdefault(name, {})
+    state.update(alive=True, current=None, last_beat=None)
+    try:
+        _work_loop(state)
+    finally:
+        state["alive"] = False
+
+
+def _work_loop(state: dict) -> None:
     while True:
-        WORKER_STATE["last_beat"] = db.now_iso()
+        state["last_beat"] = db.now_iso()
         try:
             episode_id, from_stage = WORK_Q.get(timeout=5)
         except queue.Empty:
             continue
-        WORKER_STATE["current"] = episode_id
         try:
-            run.run_episode(episode_id, CFG, from_stage=from_stage)
-        except Exception:
-            log.exception("worker crashed on episode %s", episode_id)
+            if episode_id is None:
+                return  # poison pill: one per worker, used to stop them cleanly
+            if not _claim(episode_id):
+                log.info("episode %s already in flight; skipping duplicate",
+                         episode_id)
+                continue
+            state["current"] = episode_id
+            try:
+                run.run_episode(episode_id, CFG, from_stage=from_stage)
+            except Exception:
+                log.exception("worker crashed on episode %s", episode_id)
+            finally:
+                state["current"] = None
+                _release(episode_id)
         finally:
-            WORKER_STATE["current"] = None
             WORK_Q.task_done()
 
 
@@ -205,6 +261,31 @@ def _fmt_duration(seconds) -> str:
     h, rem = divmod(total, 3600)
     m, s = divmod(rem, 60)
     return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+
+
+# A running episode is only worrying if it has stopped moving. Chunks land
+# every minute or two, so silence past this means something is wedged.
+STALL_AFTER_S = 15 * 60
+
+
+def _progress(row) -> dict | None:
+    """What a running episode is doing, and whether it is still moving."""
+    if row["status"] not in run.STAGE_NAMES:
+        return None
+    note = row["progress"] or row["status"]
+    since = None
+    if row["progress_at"]:
+        try:
+            since = (datetime.now(timezone.utc)
+                     - datetime.fromisoformat(row["progress_at"])).total_seconds()
+        except ValueError:
+            since = None
+    return {
+        "note": note,
+        "idle_s": since,
+        "idle": _fmt_duration(since) if since else None,
+        "stalled": since is not None and since > STALL_AFTER_S,
+    }
 
 
 _SMALL_WORDS = {"a", "an", "and", "as", "at", "but", "by", "for", "from", "in",
@@ -390,6 +471,7 @@ def _episode_view(row) -> dict:
         "abstract": row["abstract"],
         "venue": _decaps((row["venue"] or "").strip()) or None,
         "status": row["status"],
+        "progress": _progress(row),
         "error": row["error"],
         "created_at": row["created_at"],
         "duration_s": row["duration_s"],
@@ -676,6 +758,7 @@ def _render_library(request: Request, admin_mode: bool, error: str = ""):
             "tts_choices": tts_choices(),
             "queue": [e for e in all_episodes if e["status"] in run.STAGE_NAMES
                       or e["status"] == "queued"],
+            "workers": worker_count(),
             "error": error,
             "total_cost": sum(e["cost_usd"] for e in all_episodes),
             "feed_url": CFG["server"]["base_url"].rstrip("/") + "/feed.xml",
@@ -846,9 +929,18 @@ def health(request: Request):
     require_admin(request)
     return {
         "queue_depth": WORK_Q.qsize(),
-        "worker_alive": WORKER_STATE["alive"],
-        "worker_current": WORKER_STATE["current"],
-        "worker_last_beat": WORKER_STATE["last_beat"],
+        "workers": worker_count(),
+        # Kept for the client's health line, which only asks "is anything
+        # running": true while at least one thread is beating.
+        "worker_alive": any(s.get("alive") for s in WORKER_STATE.values()),
+        "worker_current": [
+            s["current"] for s in WORKER_STATE.values() if s.get("current")
+        ],
+        "worker_last_beat": max(
+            (s["last_beat"] for s in WORKER_STATE.values() if s.get("last_beat")),
+            default=None,
+        ),
+        "in_flight": sorted(_INFLIGHT),
         "episodes": {
             "total": len(db.list_episodes()),
             "done": sum(1 for r in db.list_episodes() if r["status"] == "done"),

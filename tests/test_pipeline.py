@@ -834,3 +834,38 @@ def test_name_token_matching_does_not_verify_an_invented_name():
     assert not appears_in_paper("Card and Fabricated (1994)", corpus), (
         "one real surname must not vouch for an invented co-author"
     )
+
+
+def test_a_timeout_is_retryable():
+    """A stalled connection should cost a retry, not the whole chunk."""
+    from pipeline import gemini
+
+    class ReadTimeout(Exception):
+        pass
+
+    assert gemini.is_retryable(ReadTimeout("timed out")) is True
+    assert gemini.is_retryable(ValueError("bad argument")) is False
+
+
+def test_the_client_is_built_with_a_deadline(monkeypatch):
+    """Without a timeout, one hung call wedges a worker forever."""
+    from pipeline import gemini
+
+    captured = {}
+
+    class FakeClient:
+        def __init__(self, http_options=None):
+            captured["timeout_ms"] = http_options.timeout
+
+    monkeypatch.setattr(gemini, "_client", None)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    import google.genai
+    monkeypatch.setattr(google.genai, "Client", FakeClient)
+
+    gemini.configure({"retry": {"request_timeout_s": 42}})
+    try:
+        gemini.client()
+    finally:
+        gemini._client = None
+        gemini._timeout_s = gemini.DEFAULT_TIMEOUT_S
+    assert captured["timeout_ms"] == 42_000

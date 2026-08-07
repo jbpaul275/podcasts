@@ -16,6 +16,14 @@
 
   {% if admin and ep.error %}<p class="error">{{ ep.error }}</p>{% endif %}
 
+  {% if admin and ep.progress %}
+    <p class="progress{% if ep.progress.stalled %} bad{% endif %}">
+      {{ ep.progress.note }}
+      {%- if ep.progress.idle %} · no movement for {{ ep.progress.idle }}{% endif %}
+      {%- if ep.progress.stalled %} — looks stalled; retry the stage below (finished chunks are kept){% endif %}
+    </p>
+  {% endif %}
+
   {% if admin and gaps %}
     <section class="gapwarn">
       <h2>Audio is incomplete</h2>
