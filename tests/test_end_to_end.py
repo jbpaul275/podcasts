@@ -1927,6 +1927,105 @@ def test_progress_reaches_the_admin_pages(client, env):
         assert "stalled" in body, url
 
 
+# --------------------------------------------------------- stale gap warnings
+
+def _fake_stage_rows(pairs):
+    """(stage, detail) in rowid order, shaped like db.get_stage_log rows."""
+    return [{"stage": s, "detail": d} for s, d in pairs]
+
+
+def test_a_retry_that_fills_the_gaps_clears_the_warning(env):
+    """The reported bug: an episode whose audio was fixed by a retry still
+    showed the original gap warnings, because the stage log is append-only."""
+    import app as app_mod
+
+    rows = _fake_stage_rows([
+        ("synthesizing", None),
+        ("synthesizing:gaps", "chunks failed: [1, 3, 4, 5, 6, 7, 8]"),
+        ("assembling", None),
+        ("assembling:gaps", "assembled with gaps at chunk(s) [1, 3, 4, 5, 6, 7, 8]"),
+        # retry: most chunks land, one still missing
+        ("synthesizing", None),
+        ("synthesizing:gaps", "chunks failed: [1]"),
+        ("assembling", None),
+        ("assembling:gaps", "assembled with gaps at chunk(s) [1]"),
+        # second retry: everything lands, no gap rows written at all
+        ("synthesizing", None),
+        ("assembling", None),
+    ])
+    assert app_mod._current_gaps(rows) == []
+
+
+def test_the_latest_run_is_the_one_that_counts(env):
+    import app as app_mod
+
+    rows = _fake_stage_rows([
+        ("synthesizing", None),
+        ("synthesizing:gaps", "old: [1, 2, 3]"),
+        ("synthesizing", None),
+        ("synthesizing:gaps", "current: [2]"),
+    ])
+    assert app_mod._current_gaps(rows) == ["current: [2]"]
+
+
+def test_a_real_gap_is_still_reported(env):
+    """The warning has to survive; silencing it entirely would be worse."""
+    import app as app_mod
+
+    rows = _fake_stage_rows([
+        ("synthesizing", None),
+        ("synthesizing:gaps", "chunks failed: [4]"),
+        ("assembling", None),
+        ("assembling:gaps", "INCOMPLETE: missing chunk(s) [4]"),
+    ])
+    assert app_mod._current_gaps(rows) == [
+        "chunks failed: [4]", "INCOMPLETE: missing chunk(s) [4]",
+    ]
+
+
+def test_stages_are_tracked_independently(env):
+    """Re-synthesizing must not clear a real assembling gap, or vice versa."""
+    import app as app_mod
+
+    rows = _fake_stage_rows([
+        ("assembling", None),
+        ("assembling:gaps", "INCOMPLETE: missing chunk(s) [7]"),
+        ("synthesizing", None),
+    ])
+    assert app_mod._current_gaps(rows) == ["INCOMPLETE: missing chunk(s) [7]"]
+
+
+def test_other_stage_suffixes_are_not_gap_warnings(env):
+    """scripting:flags and scripting:fallback share the suffix shape."""
+    import app as app_mod
+
+    rows = _fake_stage_rows([
+        ("scripting", None),
+        ("scripting:flags", "3 citation-shaped string(s) flagged for review"),
+        ("scripting:fallback", "pro had no quota, flash wrote it"),
+    ])
+    assert app_mod._current_gaps(rows) == []
+
+
+def test_gap_warning_clears_end_to_end_after_a_successful_retry(client, env, tmp_path):
+    import db
+    from pipeline import ingest, run
+
+    pdf = tmp_path / "gap.pdf"
+    _make_pdf(pdf)
+    episode_id = ingest.ingest_pdf(pdf, env["cfg"])
+
+    # A run that leaves a gap behind.
+    db.stage_start(episode_id, "synthesizing")
+    db.stage_end(episode_id, "synthesizing", ok=True)
+    db.stage_start(episode_id, "synthesizing:gaps")
+    db.stage_end(episode_id, "synthesizing:gaps", ok=False,
+                 detail="chunks failed and will be gaps in the final audio: [1, 3]")
+    assert "Audio is incomplete" in client.get(f"/episode/{episode_id}").text
+
+    # A clean retry writes no gap row, and the warning must go.
+    run.run_episode(episode_id, env["cfg"], from_stage="synthesizing")
+    assert "Audio is incomplete" not in client.get(f"/episode/{episode_id}").text
 # ------------------------------------------------------- rewriting the script
 
 def _scripted_episode(env, tmp_path, name="rw.pdf"):
