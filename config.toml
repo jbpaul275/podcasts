@@ -105,20 +105,35 @@ author      = "Paperpod"
 owner_name    = "Josh Paul"
 contact_email = "jbpaul275@gmail.com"
 
-# USD per 1M tokens. TTS prices are the documented preview prices; the two
-# text-model prices are estimates -- verify against current Gemini pricing.
-# The *-latest aliases carry the last known prices for the tier they point at.
-# VERIFY THESE against ai.google.dev/gemini-api/docs/pricing -- an alias can be
-# repointed at a model that costs something else, and nothing here would notice.
-# Scripting is ~2-3% of an episode, so an error is small but not zero. A model
-# with no entry is silently costed at $0.00, which is worse.
+# USD per 1M tokens, from the published Gemini API rates.
+#
+# Costs are looked up by the model that ACTUALLY served the request -- the
+# response reports it -- falling back to the name we asked for. So the concrete
+# entries below are what normally apply, and the *-latest rows are only a
+# backstop for a response that does not name its model. When an alias moves to
+# something with no entry here, the log says so rather than quietly reading
+# $0.00.
+[costs."gemini-3.1-pro-preview"]
+input_per_1m  = 2.00
+output_per_1m = 12.00
+
+# Note: Pro charges 4.00/18.00 above a 200k-token prompt. [script] max_pages is
+# 120, which lands well short of that, so the single rate is used.
 [costs."gemini-pro-latest"]
 input_per_1m  = 2.00
 output_per_1m = 12.00
 
+[costs."gemini-3.6-flash"]
+input_per_1m  = 1.50
+output_per_1m = 7.50
+
+[costs."gemini-3.5-flash"]
+input_per_1m  = 1.50
+output_per_1m = 7.50
+
 [costs."gemini-flash-latest"]
-input_per_1m  = 0.30
-output_per_1m = 2.50
+input_per_1m  = 1.50
+output_per_1m = 7.50
 
 [costs."gemini-3-flash-preview"]
 input_per_1m  = 0.30

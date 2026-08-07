@@ -11,7 +11,8 @@ import re
 import db
 from config import PAPERS_DIR, load_prompt
 from . import ModelUnusable, PipelineError
-from .gemini import call_with_retry, client, pdf_part, record_cost, strip_fences
+from .gemini import (call_with_retry, client, pdf_part, record_cost,
+                     resolved_model, strip_fences)
 
 log = logging.getLogger("paperpod.script")
 
@@ -264,7 +265,9 @@ def _write_script(episode_id: str, cfg: dict, user: str, model: str | None,
             )
 
     record_cost(episode_id, model, resp, cfg, stage="script")
-    db.update_episode(episode_id, script_model=model,
+    # Store what actually ran. "gemini-pro-latest" on an episode from March
+    # tells you nothing about which model wrote it.
+    db.update_episode(episode_id, script_model=resolved_model(resp, model),
                       grounding_json=json.dumps(collect_grounding(resp)))
     script = _clean(resp.text or "")
     violations = _format_violations(script)

@@ -171,23 +171,52 @@ def call_with_retry(fn, cfg: dict, model: str, label: str = "request",
     raise last if last else PipelineError(f"{label} failed for an unknown reason")
 
 
+def resolved_model(response, requested: str) -> str:
+    """Which model actually served the request.
+
+    [models] names aliases like gemini-pro-latest, and Google repoints those
+    without telling anyone. The response says what really ran, so pricing and
+    the UI can both stop guessing.
+    """
+    return (getattr(response, "model_version", None) or "").strip() or requested
+
+
 def record_cost(episode_id: str, model: str, response, cfg: dict,
                 stage: str = "other") -> float:
     """Compute USD cost from usage metadata and accumulate it on the episode."""
     usage = getattr(response, "usage_metadata", None)
     if usage is None:
         return 0.0
-    prices = cfg.get("costs", {}).get(model)
+    costs = cfg.get("costs", {})
+    # Price what ran, not what was asked for. An alias repointed at a
+    # differently-priced model is exactly the case a static table cannot see.
+    actual = resolved_model(response, model)
+    prices = costs.get(actual) or costs.get(model)
     if not prices:
         # Silently costing an unpriced model at zero is worse than useless when
         # the point of running two models is comparing what they cost.
+        key = f"{model}->{actual}" if actual != model else model
+        if key not in _UNPRICED_WARNED:
+            _UNPRICED_WARNED.add(key)
+            if actual != model:
+                log.warning(
+                    "%s now resolves to %s, which has no [costs] entry — its "
+                    "spend will read as $0.00. The alias was repointed; add a "
+                    "price for the new model.", model, actual,
+                )
+            else:
+                log.warning(
+                    "no [costs.%r] entry in config.toml — this model's spend "
+                    "will be reported as $0.00", model,
+                )
+        return 0.0
+    if actual != model and costs.get(actual) is None:
+        # Priced off the alias because the resolved name is not in the table.
+        # Works, but the number is only right while the alias has not moved.
         if model not in _UNPRICED_WARNED:
             _UNPRICED_WARNED.add(model)
-            log.warning(
-                "no [costs.%r] entry in config.toml — this model's spend will be "
-                "reported as $0.00", model,
-            )
-        return 0.0
+            log.info("pricing %s as %s; add a [costs.%r] entry to price it "
+                     "directly", actual, model, actual)
     tokens_in = getattr(usage, "prompt_token_count", 0) or 0
     tokens_out = (getattr(usage, "candidates_token_count", 0) or 0) + (
         getattr(usage, "thoughts_token_count", 0) or 0
