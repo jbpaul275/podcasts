@@ -6,6 +6,20 @@
   <title>{% block title %}Paperpod{% endblock %}</title>
   <link rel="icon" href="/static/cover.png">
   <link rel="stylesheet" href="{{ static_url('style.css') }}">
+  {# Readers only. Loading this while signed in would count every episode edit
+     and every preview as reader traffic, which is the fastest way to make the
+     numbers useless. #}
+  {% if analytics_id and not signed_in %}
+  <!-- Google tag (gtag.js) -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id={{ analytics_id }}"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+
+    gtag('config', '{{ analytics_id }}');
+  </script>
+  {% endif %}
 </head>
 <body>
   <header class="topbar">

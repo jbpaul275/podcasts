@@ -105,6 +105,9 @@ def static_url(name: str) -> str:
 
 
 templates.env.globals["static_url"] = static_url
+# A global rather than a per-route context value: every page in the site needs
+# it, and one route forgetting to pass it would silently stop counting.
+templates.env.globals["analytics_id"] = CFG.get("site", {}).get("analytics_id", "")
 
 
 @app.exception_handler(StarletteHTTPException)
@@ -128,7 +131,7 @@ async def http_error(request: Request, exc: StarletteHTTPException):
                         headers=getattr(exc, "headers", None))
 
 # Bump when the terms text changes materially.
-TERMS_UPDATED = "6 August 2026"
+TERMS_UPDATED = "7 August 2026"
 
 # Payload: {"id", "from_stage", "stop_after"}. None is the poison pill.
 WORK_Q: "queue.Queue[dict | None]" = queue.Queue()
