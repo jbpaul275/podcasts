@@ -99,7 +99,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(assemble, "CHUNKS_DIR", chunks)
     monkeypatch.setattr(assemble, "FINAL_DIR", final)
 
-    calls = {"metadata": 0, "script": 0, "tts": 0}
+    calls = {"metadata": 0, "script": 0, "revise": 0, "tts": 0}
 
     def fake_metadata(episode_id, cfg):
         calls["metadata"] += 1
@@ -112,9 +112,17 @@ def env(tmp_path, monkeypatch):
             venue="American Economic Review",
         )
 
-    def fake_script(episode_id, cfg):
+    def fake_script(episode_id, cfg, instructions=None, model=None):
         calls["script"] += 1
+        calls["script_instructions"] = instructions
+        calls["script_model"] = model
         return SAMPLE_SCRIPT
+
+    def fake_revise(episode_id, cfg, instructions, model=None):
+        calls["revise"] += 1
+        calls["revise_instructions"] = instructions
+        calls["revise_model"] = model
+        return SAMPLE_SCRIPT.replace("HOST_A:", "HOST_A: (revised)", 1)
 
     def fake_chunk(episode_id, entry, wav_path, cfg):
         calls["tts"] += 1
@@ -122,6 +130,7 @@ def env(tmp_path, monkeypatch):
 
     monkeypatch.setattr(ingest, "extract_metadata", fake_metadata)
     monkeypatch.setattr(script_mod, "generate_script", fake_script)
+    monkeypatch.setattr(script_mod, "revise_script", fake_revise)
     monkeypatch.setattr(tts, "_synthesize_chunk", fake_chunk)
 
     # run.py bound ingest.extract_metadata into STAGES at import time; rebind.
@@ -489,7 +498,7 @@ def test_rate_limited_stage_recovers_instead_of_failing(env, tmp_path, monkeypat
                       "details": [{"@type": "type.googleapis.com/google.rpc.RetryInfo",
                                    "retryDelay": "12s"}]}}
 
-    def flaky_script(eid, cfg):
+    def flaky_script(eid, cfg, instructions=None, model=None):
         def once():
             calls.append(1)
             if len(calls) < 2:
@@ -613,7 +622,7 @@ def test_workers_run_episodes_concurrently(env, monkeypatch):
     started = threading.Barrier(2, timeout=5)
     done = threading.Event()
 
-    def fake_run(episode_id, cfg, from_stage=None):
+    def fake_run(episode_id, cfg, from_stage=None, stop_after=None):
         started.wait()      # deadlocks unless a second worker is running
         done.set()
 
@@ -627,13 +636,13 @@ def test_workers_run_episodes_concurrently(env, monkeypatch):
     for t in threads:
         t.start()
     try:
-        app_mod.WORK_Q.put(("A", None))
-        app_mod.WORK_Q.put(("B", None))
+        app_mod.enqueue("A")
+        app_mod.enqueue("B")
         assert done.wait(timeout=5), "episodes did not overlap"
     finally:
         # Stop them, or they linger and steal work from later tests.
         for _ in threads:
-            app_mod.WORK_Q.put((None, None))
+            app_mod.WORK_Q.put(None)
         for t in threads:
             t.join(timeout=5)
         app_mod._INFLIGHT.clear()
@@ -991,7 +1000,7 @@ def test_retry_enqueues_named_stage(client, env, tmp_path):
     resp = client.post(f"/episode/{episode_id}/retry", data={"stage": "synthesizing"},
                        follow_redirects=False)
     assert resp.status_code == 303
-    assert app_mod.WORK_Q.get_nowait() == (episode_id, "synthesizing")
+    assert app_mod.WORK_Q.get_nowait()["from_stage"] == "synthesizing"
     assert db.get_episode(episode_id)["status"] == "queued"
 
 
@@ -1613,7 +1622,7 @@ def test_clone_reuses_the_script_with_a_different_model(public_client, env, tmp_
     assert clone["tts_model"] == "model-b"
     assert original["tts_model"] is None, "the source is left alone"
     assert (env["papers"] / f"{new_id}.pdf").exists(), "PDF copied for flag checking"
-    assert app_mod.WORK_Q.get_nowait() == (new_id, "synthesizing"), "skips scripting"
+    assert app_mod.WORK_Q.get_nowait() == {"id": new_id, "from_stage": "synthesizing", "stop_after": None}, "skips scripting"
 
 
 def test_clone_refuses_without_a_script(public_client, env, tmp_path, monkeypatch):
@@ -2022,3 +2031,310 @@ def test_an_unedited_prompt_shows_no_warnings(client, prompt_env):
 
     for name in config.prompt_names():
         assert config.prompt_warnings(name, config.prompt_default(name)) == [], name
+def test_stage_log_is_collapsed_on_a_healthy_episode(client, env, tmp_path):
+    """It is diagnostics; a working episode should not lead with it."""
+    import db
+    from pipeline import ingest
+
+    pdf = tmp_path / "sl.pdf"
+    _make_pdf(pdf)
+    episode_id = ingest.ingest_pdf(pdf, env["cfg"])
+    db.update_episode(episode_id, status="done")
+
+    body = client.get(f"/episode/{episode_id}").text
+    assert '<details class="stages"' in body
+    assert '<details class="stages" open>' not in body
+
+
+def test_stage_log_opens_itself_when_something_went_wrong(client, env, tmp_path):
+    """Collapsing it must not hide the one case you actually need it for."""
+    import db
+    from pipeline import ingest
+
+    pdf = tmp_path / "sl2.pdf"
+    _make_pdf(pdf)
+    episode_id = ingest.ingest_pdf(pdf, env["cfg"])
+    db.update_episode(episode_id, status="failed", error="boom")
+    assert '<details class="stages" open>' in client.get(f"/episode/{episode_id}").text
+
+    # A gap warning counts too: the detail explaining it lives in the log.
+    db.update_episode(episode_id, status="done")
+    db.stage_start(episode_id, "synthesizing")
+    db.stage_end(episode_id, "synthesizing", ok=True)
+    db.stage_start(episode_id, "synthesizing:gaps")
+    db.stage_end(episode_id, "synthesizing:gaps", ok=False, detail="chunks failed: [2]")
+    assert '<details class="stages" open>' in client.get(f"/episode/{episode_id}").text
+# --------------------------------------------------------- stale gap warnings
+
+def _fake_stage_rows(pairs):
+    """(stage, detail) in rowid order, shaped like db.get_stage_log rows."""
+    return [{"stage": s, "detail": d} for s, d in pairs]
+
+
+def test_a_retry_that_fills_the_gaps_clears_the_warning(env):
+    """The reported bug: an episode whose audio was fixed by a retry still
+    showed the original gap warnings, because the stage log is append-only."""
+    import app as app_mod
+
+    rows = _fake_stage_rows([
+        ("synthesizing", None),
+        ("synthesizing:gaps", "chunks failed: [1, 3, 4, 5, 6, 7, 8]"),
+        ("assembling", None),
+        ("assembling:gaps", "assembled with gaps at chunk(s) [1, 3, 4, 5, 6, 7, 8]"),
+        # retry: most chunks land, one still missing
+        ("synthesizing", None),
+        ("synthesizing:gaps", "chunks failed: [1]"),
+        ("assembling", None),
+        ("assembling:gaps", "assembled with gaps at chunk(s) [1]"),
+        # second retry: everything lands, no gap rows written at all
+        ("synthesizing", None),
+        ("assembling", None),
+    ])
+    assert app_mod._current_gaps(rows) == []
+
+
+def test_the_latest_run_is_the_one_that_counts(env):
+    import app as app_mod
+
+    rows = _fake_stage_rows([
+        ("synthesizing", None),
+        ("synthesizing:gaps", "old: [1, 2, 3]"),
+        ("synthesizing", None),
+        ("synthesizing:gaps", "current: [2]"),
+    ])
+    assert app_mod._current_gaps(rows) == ["current: [2]"]
+
+
+def test_a_real_gap_is_still_reported(env):
+    """The warning has to survive; silencing it entirely would be worse."""
+    import app as app_mod
+
+    rows = _fake_stage_rows([
+        ("synthesizing", None),
+        ("synthesizing:gaps", "chunks failed: [4]"),
+        ("assembling", None),
+        ("assembling:gaps", "INCOMPLETE: missing chunk(s) [4]"),
+    ])
+    assert app_mod._current_gaps(rows) == [
+        "chunks failed: [4]", "INCOMPLETE: missing chunk(s) [4]",
+    ]
+
+
+def test_stages_are_tracked_independently(env):
+    """Re-synthesizing must not clear a real assembling gap, or vice versa."""
+    import app as app_mod
+
+    rows = _fake_stage_rows([
+        ("assembling", None),
+        ("assembling:gaps", "INCOMPLETE: missing chunk(s) [7]"),
+        ("synthesizing", None),
+    ])
+    assert app_mod._current_gaps(rows) == ["INCOMPLETE: missing chunk(s) [7]"]
+
+
+def test_other_stage_suffixes_are_not_gap_warnings(env):
+    """scripting:flags and scripting:fallback share the suffix shape."""
+    import app as app_mod
+
+    rows = _fake_stage_rows([
+        ("scripting", None),
+        ("scripting:flags", "3 citation-shaped string(s) flagged for review"),
+        ("scripting:fallback", "pro had no quota, flash wrote it"),
+    ])
+    assert app_mod._current_gaps(rows) == []
+
+
+def test_gap_warning_clears_end_to_end_after_a_successful_retry(client, env, tmp_path):
+    import db
+    from pipeline import ingest, run
+
+    pdf = tmp_path / "gap.pdf"
+    _make_pdf(pdf)
+    episode_id = ingest.ingest_pdf(pdf, env["cfg"])
+
+    # A run that leaves a gap behind.
+    db.stage_start(episode_id, "synthesizing")
+    db.stage_end(episode_id, "synthesizing", ok=True)
+    db.stage_start(episode_id, "synthesizing:gaps")
+    db.stage_end(episode_id, "synthesizing:gaps", ok=False,
+                 detail="chunks failed and will be gaps in the final audio: [1, 3]")
+    assert "Audio is incomplete" in client.get(f"/episode/{episode_id}").text
+
+    # A clean retry writes no gap row, and the warning must go.
+    run.run_episode(episode_id, env["cfg"], from_stage="synthesizing")
+    assert "Audio is incomplete" not in client.get(f"/episode/{episode_id}").text
+# ------------------------------------------------------- rewriting the script
+
+def _scripted_episode(env, tmp_path, name="rw.pdf"):
+    """An episode that has been through scripting and has audio."""
+    import db
+    from pipeline import ingest, run
+
+    pdf = tmp_path / name
+    _make_pdf(pdf)
+    episode_id = ingest.ingest_pdf(pdf, env["cfg"])
+    run.run_episode(episode_id, env["cfg"])
+    db.update_episode(episode_id, audio_built_at=db.now_iso())
+    return episode_id
+
+
+def test_revising_sends_the_notes_to_the_model(client, env, tmp_path):
+    import db
+    import app as app_mod
+
+    episode_id = _scripted_episode(env, tmp_path)
+    before = db.get_episode(episode_id)["script_md"]
+
+    resp = client.post(f"/episode/{episode_id}/rewrite", follow_redirects=False,
+                       data={"mode": "revise",
+                             "instructions": "Cut the instrument, expand section 5."})
+    assert resp.status_code == 303
+
+    job = app_mod.WORK_Q.get_nowait()
+    assert job["from_stage"] == "scripting"
+    # The whole point of stopping: TTS is ~97% of the cost, so a wording tweak
+    # must not silently re-synthesize.
+    assert job["stop_after"] == "scripting"
+
+    app_mod.run.run_episode(episode_id, env["cfg"],
+                            from_stage=job["from_stage"], stop_after=job["stop_after"])
+
+    assert env["calls"]["revise"] == 1
+    assert env["calls"]["revise_instructions"] == "Cut the instrument, expand section 5."
+    row = db.get_episode(episode_id)
+    assert row["script_md"] != before
+    assert row["script_prev"] == before, "the old script is kept for undo"
+    assert row["rewrite_json"] is None, "the request is cleared once served"
+    assert row["status"] == "needs_review"
+
+
+def test_a_rewrite_does_not_resynthesize(client, env, tmp_path):
+    import app as app_mod
+
+    episode_id = _scripted_episode(env, tmp_path, "rw2.pdf")
+    tts_before = env["calls"]["tts"]
+
+    client.post(f"/episode/{episode_id}/rewrite",
+                data={"mode": "revise", "instructions": "Shorter."})
+    job = app_mod.WORK_Q.get_nowait()
+    app_mod.run.run_episode(episode_id, env["cfg"],
+                            from_stage=job["from_stage"], stop_after=job["stop_after"])
+
+    assert env["calls"]["tts"] == tts_before, "a wording change must not re-buy audio"
+
+
+def test_regenerating_with_a_model_passes_it_through(client, env, tmp_path):
+    import app as app_mod
+
+    episode_id = _scripted_episode(env, tmp_path, "rw3.pdf")
+    model = app_mod.script_choices()[-1]
+
+    client.post(f"/episode/{episode_id}/rewrite",
+                data={"mode": "regenerate", "instructions": "More on the data.",
+                      "script_model": model})
+    job = app_mod.WORK_Q.get_nowait()
+    app_mod.run.run_episode(episode_id, env["cfg"],
+                            from_stage=job["from_stage"], stop_after=job["stop_after"])
+
+    assert env["calls"]["revise"] == 0, "regenerate must not go through revise"
+    assert env["calls"]["script_model"] == model
+    assert env["calls"]["script_instructions"] == "More on the data."
+
+
+def test_revising_needs_notes(client, env, tmp_path):
+    episode_id = _scripted_episode(env, tmp_path, "rw4.pdf")
+    resp = client.post(f"/episode/{episode_id}/rewrite",
+                       data={"mode": "revise", "instructions": "   "})
+    assert resp.status_code == 400
+
+
+def test_an_unknown_script_model_is_rejected(client, env, tmp_path):
+    episode_id = _scripted_episode(env, tmp_path, "rw5.pdf")
+    resp = client.post(f"/episode/{episode_id}/rewrite",
+                       data={"mode": "revise", "instructions": "x",
+                             "script_model": "gemini-does-not-exist"})
+    assert resp.status_code == 400
+
+
+def test_rewriting_a_running_episode_is_refused(client, env, tmp_path):
+    import db
+
+    episode_id = _scripted_episode(env, tmp_path, "rw6.pdf")
+    db.update_episode(episode_id, status="synthesizing")
+    resp = client.post(f"/episode/{episode_id}/rewrite",
+                       data={"mode": "revise", "instructions": "x"})
+    assert resp.status_code == 409
+
+
+def test_undo_restores_the_previous_script(client, env, tmp_path):
+    import db
+    import app as app_mod
+
+    episode_id = _scripted_episode(env, tmp_path, "rw7.pdf")
+    original = db.get_episode(episode_id)["script_md"]
+
+    client.post(f"/episode/{episode_id}/rewrite",
+                data={"mode": "revise", "instructions": "Shorter."})
+    job = app_mod.WORK_Q.get_nowait()
+    app_mod.run.run_episode(episode_id, env["cfg"],
+                            from_stage=job["from_stage"], stop_after=job["stop_after"])
+    assert db.get_episode(episode_id)["script_md"] != original
+
+    resp = client.post(f"/episode/{episode_id}/script/revert", follow_redirects=False)
+    assert resp.status_code == 303
+    assert db.get_episode(episode_id)["script_md"] == original
+
+
+def test_undo_with_nothing_to_undo_is_refused(client, env, tmp_path):
+    episode_id = _scripted_episode(env, tmp_path, "rw8.pdf")
+    assert client.post(f"/episode/{episode_id}/script/revert").status_code == 400
+
+
+def test_audio_built_before_the_script_reads_as_stale(client, env, tmp_path):
+    """Otherwise the player quietly serves words nobody approved."""
+    import db
+    import app as app_mod
+
+    episode_id = _scripted_episode(env, tmp_path, "rw9.pdf")
+    db.update_episode(episode_id, audio_built_at="2026-08-01T00:00:00+00:00",
+                      script_updated_at="2026-08-02T00:00:00+00:00")
+    assert app_mod._episode_view(db.get_episode(episode_id))["audio_is_stale"] is True
+
+    db.update_episode(episode_id, audio_built_at="2026-08-03T00:00:00+00:00")
+    assert app_mod._episode_view(db.get_episode(episode_id))["audio_is_stale"] is False
+
+    body = client.get(f"/episode/{episode_id}").text
+    assert "Rewrite the script" in body
+
+
+def test_a_rewrite_survives_a_restart(env, tmp_path):
+    """The request is on the episode, not in the queue, so a crash mid-rewrite
+    resumes the rewrite rather than silently regenerating without the notes."""
+    import json
+    import db
+    import app as app_mod
+
+    episode_id = _scripted_episode(env, tmp_path, "rw10.pdf")
+    db.update_episode(episode_id, status="queued", rewrite_json=json.dumps(
+        {"mode": "revise", "instructions": "Keep the cold open.", "model": None}))
+
+    # Queue contents are lost on restart; only the DB survives.
+    app_mod.run.run_episode(episode_id, env["cfg"], from_stage="scripting",
+                            stop_after="scripting")
+    assert env["calls"]["revise_instructions"] == "Keep the cold open."
+
+
+def test_retry_defaults_to_synthesizing_after_a_rewrite(client, env, tmp_path):
+    """Defaulting to `extracting` would regenerate the script and discard the
+    rewrite -- the opposite of what the button is for at that moment."""
+    import db
+    import app as app_mod
+
+    episode_id = _scripted_episode(env, tmp_path, "rw11.pdf")
+    assert app_mod._default_retry_stage(db.get_episode(episode_id)) == "extracting"
+
+    db.update_episode(episode_id, status=app_mod.run.NEEDS_REVIEW)
+    assert app_mod._default_retry_stage(db.get_episode(episode_id)) == "synthesizing"
+
+    body = client.get(f"/episode/{episode_id}").text
+    assert '<option value="synthesizing" selected>' in body

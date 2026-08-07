@@ -9,7 +9,7 @@
     {%- if ep.year %}{{ ep.year }}{% endif %}{% if ep.venue %}{% if ep.year %} · {% endif %}{{ ep.venue }}{% endif %}
   </p>
   <p class="meta">
-    {% if admin %}<span class="status status-{{ ep.status }}">{{ ep.status }}</span>{% endif %}
+    {% if admin %}<span class="status status-{{ ep.status }}">{{ ep.status_label or ep.status }}</span>{% endif %}
     {% if ep.has_audio %}<span>{{ ep.duration }}</span>{% endif %}
     {% if admin %}<span class="cost">${{ '%.4f'|format(ep.cost_usd) }} API cost</span>{% endif %}
   </p>
@@ -65,6 +65,60 @@
         {% for f in ep.flags_in_paper %}<li><code>{{ f.text }}</code>
           <span class="muted">— {{ 'found on the web' if f.source == 'web' else 'in the paper' }}, line {{ f.line }}</span></li>{% endfor %}
       </ul>
+    </details>
+  {% endif %}
+
+  {% if admin and ep.audio_is_stale %}
+    <p class="stalewarn">The script has changed since this audio was built — the
+      player above is speaking the old words. Re-run from <em>synthesizing</em>
+      at the bottom of the page to rebuild it.</p>
+  {% endif %}
+
+  {% if admin and ep.script_md_present %}
+    <details class="rewritebox">
+      <summary>Rewrite the script</summary>
+
+      {% if ep.script_note %}
+        <p class="lastnote">Last rewrite asked for: <q>{{ ep.script_note }}</q></p>
+      {% endif %}
+
+      <form action="/episode/{{ ep.id }}/rewrite" method="post">
+        <label for="rw-notes">What should change?</label>
+        <textarea id="rw-notes" name="instructions" rows="4"
+                  placeholder="Make the part about the instrument shorter, and spend more time on the heterogeneity results in section 5."></textarea>
+        <p class="hint">Plain English. Be specific about what to cut and what to
+          grow — the paper is sent along, so asking for more on a section it
+          covers will actually get you more.</p>
+
+        {% if script_choices|length > 1 %}
+          <label for="rw-model">Model</label>
+          <select id="rw-model" name="script_model">
+            {% for m in script_choices %}
+              <option value="{{ m }}"{{ ' selected' if m == ep.script_model }}>{{ m }}</option>
+            {% endfor %}
+          </select>
+        {% endif %}
+
+        <div class="rwactions">
+          <button type="submit" name="mode" value="revise">Revise this script</button>
+          <button type="submit" name="mode" value="regenerate" class="secondary">Start over from the paper</button>
+        </div>
+        <p class="hint"><strong>Revise</strong> edits what is there, leaving
+          untouched passages intact. <strong>Start over</strong> ignores the
+          current script and writes a fresh one, using your notes as extra
+          direction — use it to try a different model on the same paper.</p>
+        <p class="hint">Either way this runs scripting only and stops, so you can
+          read the result before paying for audio — one script call, a few cents.
+          Re-run from <em>synthesizing</em> at the bottom of the page when the
+          script reads right.</p>
+      </form>
+
+      {% if ep.can_revert_script %}
+        <form action="/episode/{{ ep.id }}/script/revert" method="post" class="revertform">
+          <button type="submit" class="secondary">Undo the last rewrite</button>
+          <span class="hint">One step back only.</span>
+        </form>
+      {% endif %}
     </details>
   {% endif %}
 
@@ -243,8 +297,10 @@
     {% endif %}
   </section>
 
-  <section class="stages">
-    <h2>Stage log</h2>
+  {# Collapsed by default: it is diagnostics, and most episodes never need it.
+     Opens itself when something went wrong, which is the one time you do. #}
+  <details class="stages"{% if ep.status == 'failed' or gaps %} open{% endif %}>
+    <summary>Stage log<span class="stagecount">{{ stages|length }} step{{ '' if stages|length == 1 else 's' }}</span></summary>
     <table>
       <tr><th>Stage</th><th>Started</th><th>Ended</th><th>OK</th><th>Detail</th></tr>
       {% for s in stages %}
@@ -257,13 +313,13 @@
       </tr>
       {% endfor %}
     </table>
-  </section>
+  </details>
 
   <section class="actions">
     <form action="/episode/{{ ep.id }}/retry" method="post">
       <label>Re-run from
         <select name="stage">
-          {% for s in retry_stages %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
+          {% for s in retry_stages %}<option value="{{ s }}"{{ ' selected' if s == default_retry_stage }}>{{ s }}</option>{% endfor %}
         </select>
       </label>
       <button type="submit">Retry</button>
