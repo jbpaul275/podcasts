@@ -24,6 +24,7 @@ import db
 from config import CHUNKS_DIR
 from . import ModelUnusable, NoAudioError, PipelineError
 from .gemini import call_with_retry, client, record_cost
+from .intro import synthesize_intro
 from .script import parse_turns
 
 log = logging.getLogger("paperpod.tts")
@@ -68,6 +69,12 @@ def synthesize(episode_id: str, cfg: dict) -> None:
 
     out_dir = CHUNKS_DIR / episode_id
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    # The spoken AI disclosure, first: it is one short call, and if speech
+    # generation is broken it fails here rather than after paying for every
+    # chunk of dialogue. Named intro.wav rather than a sequence number so the
+    # chunk gap detection in assembly is unaffected by it.
+    synthesize_intro(episode_id, cfg)
 
     # Manifest on disk so a partial run is inspectable.
     manifest = []

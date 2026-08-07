@@ -12,7 +12,7 @@ import wave
 
 import db
 from config import CHUNKS_DIR, FINAL_DIR
-from . import PipelineError
+from . import PipelineError, intro as intro_mod
 
 log = logging.getLogger("paperpod.assemble")
 
@@ -36,6 +36,26 @@ def _expected_chunks(chunk_dir, fallback: int) -> int:
     except (OSError, json.JSONDecodeError, TypeError):
         pass
     return fallback
+
+
+def _intro_part(chunk_dir, rate: int, cfg: dict):
+    """The intro WAV, resampled if it does not match the dialogue chunks.
+    The concat demuxer stream-copies, so a mismatched sample rate would not be
+    an error — it would be an intro that plays at the wrong speed."""
+    if not intro_mod.enabled(cfg):
+        return None
+    intro = chunk_dir / intro_mod.WAV_NAME
+    if not intro.exists() or intro.stat().st_size <= 44:
+        return None
+    with wave.open(str(intro), "rb") as w:
+        if w.getframerate() == rate and w.getnchannels() == 1:
+            return intro
+    fixed = chunk_dir / "_intro_matched.wav"
+    _run([
+        "ffmpeg", "-y", "-i", str(intro),
+        "-ar", str(rate), "-ac", "1", "-sample_fmt", "s16", str(fixed),
+    ])
+    return fixed
 
 
 def assemble(episode_id: str, cfg: dict) -> None:
@@ -70,9 +90,21 @@ def assemble(episode_id: str, cfg: dict) -> None:
         "-sample_fmt", "s16", str(silence),
     ])
 
+    # The spoken AI disclosure goes in front of the conversation. Missing is
+    # not fatal here — episodes built before the disclosure existed still
+    # assemble — but it is worth a line in the log, since the fix is to retry
+    # from synthesizing.
+    parts = list(wavs)
+    intro = _intro_part(chunk_dir, rate, cfg)
+    if intro:
+        parts.insert(0, intro)
+    elif intro_mod.enabled(cfg):
+        log.warning("no intro audio in %s; assembling without the spoken "
+                    "disclosure", chunk_dir)
+
     concat_list = chunk_dir / "_concat.txt"
     lines = []
-    for i, wav in enumerate(wavs):
+    for i, wav in enumerate(parts):
         if i:
             lines.append(f"file '{silence.name}'")
         lines.append(f"file '{wav.name}'")
@@ -131,7 +163,7 @@ def assemble(episode_id: str, cfg: dict) -> None:
                     f"Retry from synthesizing to fill them in."),
         )
 
-    for tmp in (silence, concat_list, joined):
+    for tmp in (silence, concat_list, joined, chunk_dir / "_intro_matched.wav"):
         tmp.unlink(missing_ok=True)
 
 

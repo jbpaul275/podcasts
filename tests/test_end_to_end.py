@@ -26,6 +26,12 @@ from pipeline import tts as _tts_module  # noqa: E402
 
 _ORIGINAL_SYNTH_CHUNK = _tts_module._synthesize_chunk
 
+from pipeline import intro as intro_mod  # noqa: E402
+
+# The stub intro is deliberately a different length from the stub chunks, so a
+# test that measures the assembled audio can tell whether it is in there.
+INTRO_SECONDS = 0.8
+
 from pipeline import script as _script_module  # noqa: E402
 
 _REAL_GENERATE_SCRIPT = _script_module.generate_script
@@ -112,10 +118,11 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(ingest, "PAPERS_DIR", papers)
     monkeypatch.setattr(script_mod, "PAPERS_DIR", papers)
     monkeypatch.setattr(tts, "CHUNKS_DIR", chunks)
+    monkeypatch.setattr(intro_mod, "CHUNKS_DIR", chunks)
     monkeypatch.setattr(assemble, "CHUNKS_DIR", chunks)
     monkeypatch.setattr(assemble, "FINAL_DIR", final)
 
-    calls = {"metadata": 0, "script": 0, "revise": 0, "tts": 0}
+    calls = {"metadata": 0, "script": 0, "revise": 0, "tts": 0, "intro": 0}
 
     def fake_metadata(episode_id, cfg):
         calls["metadata"] += 1
@@ -144,10 +151,16 @@ def env(tmp_path, monkeypatch):
         calls["tts"] += 1
         _write_sine_wav(wav_path, freq=200 + 40 * entry["seq"])
 
+    def fake_intro(episode_id, text, wav, cfg):
+        calls["intro"] += 1
+        calls["intro_text"] = text
+        _write_sine_wav(wav, seconds=INTRO_SECONDS, freq=160)
+
     monkeypatch.setattr(ingest, "extract_metadata", fake_metadata)
     monkeypatch.setattr(script_mod, "generate_script", fake_script)
     monkeypatch.setattr(script_mod, "revise_script", fake_revise)
     monkeypatch.setattr(tts, "_synthesize_chunk", fake_chunk)
+    monkeypatch.setattr(intro_mod, "_synthesize", fake_intro)
 
     # run.py bound ingest.extract_metadata into STAGES at import time; rebind.
     from pipeline import run as run_mod
@@ -320,8 +333,10 @@ def test_seam_silence_is_inserted_between_chunks(env, tmp_path):
     n_chunks = len(list((env["chunks"] / episode_id).glob("[0-9][0-9][0-9].wav")))
     assert n_chunks > 1
     duration = db.get_episode(episode_id)["duration_s"]
-    expected_audio = 1.5 * n_chunks
-    expected_silence = 0.4 * (n_chunks - 1)
+    # The spoken disclosure is a part like any other: it is in front of the
+    # first chunk, with a seam of its own after it.
+    expected_audio = 1.5 * n_chunks + INTRO_SECONDS
+    expected_silence = 0.4 * n_chunks
     assert duration == pytest.approx(expected_audio + expected_silence, abs=0.5)
 
 
@@ -2788,6 +2803,13 @@ def _live_episode(env, tmp_path, name="feed.pdf", duration=612.4):
     db.update_episode(eid, status="done", published=1, flags_reviewed=1,
                       title=name, audio_path=str(mp3), duration_s=duration,
                       authors=json.dumps(["A Person"]), summary="A blurb.")
+    # This stands in for an episode the pipeline built, so it carries the
+    # spoken disclosure the pipeline would have recorded.
+    chunk_dir = env["chunks"] / eid
+    chunk_dir.mkdir(parents=True, exist_ok=True)
+    _write_sine_wav(chunk_dir / "intro.wav", seconds=INTRO_SECONDS)
+    (chunk_dir / "intro.txt").write_text(
+        intro_mod.intro_text(db.get_episode(eid), env["cfg"]), encoding="utf-8")
     return eid
 
 
@@ -3074,3 +3096,113 @@ def test_the_cover_art_meets_both_directories(env):
     assert w >= 640, "Spotify minimum"
     assert colour in (2, 6), "RGB, not palette or greyscale"
     assert cover.stat().st_size < 5 * 1024 * 1024
+
+
+# ------------------------------------------------------- spoken AI disclosure
+
+@pytest.mark.skipif(not HAS_FFMPEG, reason="ffmpeg required")
+def test_every_episode_opens_with_the_ai_disclosure(env, tmp_path):
+    """Apple wants AI disclosed in the show metadata, in each episode's
+    metadata, and in the audio itself. This is the audio."""
+    import db
+    from pipeline import intro as intro_pkg
+
+    episode_id = _done_episode(env, tmp_path)
+
+    assert env["calls"]["intro"] == 1
+    said = env["calls"]["intro_text"]
+    assert "AI generated" in said
+    assert "Minimum Wages and Employment" in said
+    assert "David Card and Alan Krueger" in said
+    assert intro_pkg.recorded_text(episode_id) == said
+
+    # In front of the conversation, not somewhere in the middle of it: the
+    # assembled audio is longer than the dialogue chunks alone by the intro.
+    chunks = sorted((env["chunks"] / episode_id).glob("[0-9][0-9][0-9].wav"))
+    dialogue = 1.5 * len(chunks)
+    duration = db.get_episode(episode_id)["duration_s"]
+    assert duration > dialogue + INTRO_SECONDS / 2
+
+
+@pytest.mark.skipif(not HAS_FFMPEG, reason="ffmpeg required")
+def test_the_disclosure_is_not_a_dialogue_chunk(env, tmp_path):
+    """It lives outside the NNN.wav sequence, so the gap detection that spots a
+    truncated episode cannot mistake it for a missing chunk."""
+    episode_id = _done_episode(env, tmp_path)
+    chunk_dir = env["chunks"] / episode_id
+
+    assert (chunk_dir / "intro.wav").exists()
+    assert not list(chunk_dir.glob("[0-9][0-9][0-9]intro*"))
+    manifest = json.loads((chunk_dir / "manifest.json").read_text())
+    assert len(manifest) == len(list(chunk_dir.glob("[0-9][0-9][0-9].wav")))
+
+
+@pytest.mark.skipif(not HAS_FFMPEG, reason="ffmpeg required")
+def test_switching_the_disclosure_off_leaves_it_out(env, tmp_path):
+    import db
+    from pipeline import ingest, run
+
+    cfg = {**env["cfg"], "intro": {"enabled": False}}
+    pdf = tmp_path / "nointro.pdf"
+    _make_pdf(pdf)
+    episode_id = ingest.ingest_pdf(pdf, cfg)
+    run.run_episode(episode_id, cfg)
+
+    assert env["calls"]["intro"] == 0
+    assert not (env["chunks"] / episode_id / "intro.wav").exists()
+    chunks = sorted((env["chunks"] / episode_id).glob("[0-9][0-9][0-9].wav"))
+    assert db.get_episode(episode_id)["duration_s"] == pytest.approx(
+        1.5 * len(chunks) + 0.25 * (len(chunks) - 1), abs=0.5
+    )
+
+
+@pytest.mark.skipif(not HAS_FFMPEG, reason="ffmpeg required")
+def test_editing_the_title_marks_the_recorded_disclosure_stale(client, env, tmp_path):
+    """Nothing in the audio reveals that it announces a title someone has since
+    corrected, so the page has to say so."""
+    import db
+
+    episode_id = _done_episode(env, tmp_path)
+    html = client.get(f"/episode/{episode_id}").text
+    assert "Spoken disclosure" in html
+    assert "still announces the old wording" not in html
+
+    db.update_episode(episode_id, title="A Corrected Title")
+    html = client.get(f"/episode/{episode_id}").text
+    assert "still announces the old wording" in html
+    assert "A Corrected Title" in html
+
+    # Re-running synthesis re-records it -- and does not re-run the dialogue.
+    before = env["calls"]["tts"]
+    from pipeline import run
+    run.run_episode(episode_id, env["cfg"], from_stage="synthesizing")
+    assert env["calls"]["tts"] == before, "existing chunks must be reused"
+    assert env["calls"]["intro"] == 2
+    assert "A Corrected Title" in env["calls"]["intro_text"]
+    assert "still announces the old wording" not in client.get(f"/episode/{episode_id}").text
+
+
+@pytest.mark.skipif(not HAS_FFMPEG, reason="ffmpeg required")
+def test_audio_built_before_the_disclosure_existed_says_so(client, env, tmp_path):
+    episode_id = _done_episode(env, tmp_path)
+    (env["chunks"] / episode_id / "intro.wav").unlink()
+
+    html = client.get(f"/episode/{episode_id}").text
+    assert "does not contain one" in html
+
+
+@pytest.mark.skipif(not HAS_FFMPEG, reason="ffmpeg required")
+def test_feed_readiness_checks_the_spoken_disclosure(client, env, tmp_path):
+    """The submission checklist is where a missing disclosure should surface —
+    it is an Apple requirement, and the audio gives no sign it is absent."""
+    import app as app_mod
+    import db
+
+    episode_id = _done_episode(env, tmp_path)
+    db.update_episode(episode_id, published=1)
+    assert any(c["ok"] and "spoken AI disclosure" in c["text"]
+               for c in app_mod.feed_readiness())
+
+    (env["chunks"] / episode_id / "intro.wav").unlink()
+    checks = app_mod.feed_readiness()
+    assert any(c["ok"] is False and "spoken AI disclosure" in c["text"] for c in checks)

@@ -319,6 +319,9 @@ button:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2p
 .ttsbox p { margin: 0 0 0.7rem; font-size: 0.9rem; }
 .ttsbox .hint { font-size: 0.78rem; color: var(--muted); margin: 0.6rem 0 0; line-height: 1.5; }
 .ttsbox label { font-size: 0.85rem; }
+.ttsbox .blocked { color: var(--flag); }
+.introtext { margin: 0 0 0.7rem; padding: 0.6rem 0.9rem; border-left: 3px solid var(--rule);
+             font-size: 0.9rem; line-height: 1.6; }
 .modeltable { width: 100%; border-collapse: collapse; font-size: 0.85rem; margin-bottom: 1rem; }
 .modeltable td, .modeltable th { padding: 0.35rem 0.6rem 0.35rem 0; border-bottom: 1px solid var(--rule); text-align: left; vertical-align: top; }
 .modeltable tr.tts { background: #f2f7fc; }

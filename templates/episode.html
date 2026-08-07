@@ -293,6 +293,24 @@
   </section>
   {% endif %}
 
+  {% if admin and intro %}
+  <section class="ttsbox" id="intro">
+    <h2>Spoken disclosure</h2>
+    <p class="muted">Read by a third voice before the hosts start. Apple requires
+      the AI disclosure in the show metadata, in each episode's metadata, and in
+      the audio itself — this is the third.</p>
+    <blockquote class="introtext">{{ intro.text }}</blockquote>
+    {% if intro.missing %}
+      <p class="blocked">This episode's audio was built before the disclosure existed,
+        so it does not contain one. Retry from <strong>synthesizing</strong> to add it —
+        the dialogue chunks are already on disk, so only the intro is re-synthesized.</p>
+    {% elif intro.stale %}
+      <p class="blocked">The audio still announces the old wording:
+        “{{ intro.recorded }}”. Retry from <strong>synthesizing</strong> to re-record it.</p>
+    {% endif %}
+  </section>
+  {% endif %}
+
   <section class="ttsbox">
     <h2>Voice model</h2>
     <p><code>{{ ep.tts_model }}</code>{% if not ep.tts_model_pinned %}

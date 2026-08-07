@@ -41,6 +41,8 @@ def load_config() -> dict:
     for host in ("a", "b"):
         if voice := os.environ.get(f"PAPERPOD_VOICE_{host.upper()}"):
             cfg.setdefault("voices", {})[f"host_{host}"] = voice
+    if voice := os.environ.get("PAPERPOD_VOICE_INTRO"):
+        cfg.setdefault("intro", {})["voice"] = voice
     for d in (INBOX_DIR, PROCESSED_DIR, PAPERS_DIR, CHUNKS_DIR, FINAL_DIR):
         d.mkdir(parents=True, exist_ok=True)
     return cfg
