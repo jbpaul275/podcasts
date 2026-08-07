@@ -533,6 +533,28 @@ def publish_blocker(row) -> str | None:
     return None
 
 
+def _current_gaps(stages) -> list[str]:
+    """Gap warnings from the latest run of each stage, not every run ever.
+
+    The stage log is append-only, so an episode that failed, was retried and
+    then succeeded still carries the original ":gaps" rows. Reading all of them
+    told you the audio was full of holes long after a retry had filled them --
+    which is worse than saying nothing, because it trains you to ignore the one
+    warning that is real.
+
+    A fresh run of a stage supersedes whatever the previous run said about it:
+    only a gap recorded *after* the last start of that stage still applies.
+    """
+    latest: dict[str, str | None] = {}
+    for s in stages:
+        base, _, suffix = s["stage"].partition(":")
+        if not suffix:
+            latest[base] = None          # this run replaces the old verdict
+        elif suffix == "gaps" and s["detail"]:
+            latest[base] = s["detail"]
+    return [d for d in latest.values() if d]
+
+
 def _short_error(text: str | None, limit: int = 150) -> str:
     """Errors can carry a whole ffmpeg stderr dump. The library gets a
     readable first line; the episode page keeps the full text."""
@@ -812,8 +834,7 @@ def episode_page(request: Request, episode_id: str):
         if versions:
             versions.insert(0, view)
     stages = db.get_stage_log(episode_id) if admin_mode else []
-    gaps = [s["detail"] for s in stages
-            if s["stage"].endswith(":gaps") and s["detail"]]
+    gaps = _current_gaps(stages)
     return templates.TemplateResponse(
         request,
         "episode.html",
