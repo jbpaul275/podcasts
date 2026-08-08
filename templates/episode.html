@@ -122,6 +122,51 @@
     </details>
   {% endif %}
 
+  {# Works cited. Public, unlike the plan and the research: it is what the
+     episode's claims rest on, and a listener has more use for it than anyone. #}
+  {% if ep.papers|length > 1 %}
+    <section class="cited">
+      <h2>Works discussed</h2>
+      <ul>
+        {% for p in ep.papers %}
+          <li>
+            {% if p.source_url %}<a href="{{ p.source_url }}" rel="noopener nofollow" target="_blank">{{ p.title }}</a>{% else %}{{ p.title }}{% endif %}
+            {% if p.credit %} — {{ p.credit }}{% endif %}{% if p.year %} ({{ p.year }}){% endif %}
+            {% if p.role != 'principal' %}<span class="muted">· drawn on</span>{% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    </section>
+  {% endif %}
+
+  {% if admin and ep.positions %}
+    <details class="plan">
+      <summary>How these works stand to each other{% if ep.relation %} — {{ ep.relation }}{% endif %}</summary>
+      {% if ep.positions.question %}<p class="muted">The question: {{ ep.positions.question }}</p>{% endif %}
+      {% if not ep.positions.commensurable %}
+        <p class="muted"><strong>These are not answering the same question.</strong>
+          {{ ep.positions.why }} The episode explains the mismatch rather than
+          picking a winner — which is usually the more interesting episode.</p>
+      {% elif ep.positions.crux %}
+        <p class="muted">The disagreement rests on: {{ ep.positions.crux }}</p>
+      {% endif %}
+      <ul>
+        {% for w in ep.positions.papers %}
+          <li><strong>{{ w.title }}</strong><br>
+            {{ w.claim }}
+            {% if w.construct or w.population or w.period %}
+              <br><span class="muted">
+                {%- if w.construct %}measures {{ w.construct }}{% endif -%}
+                {%- if w.population %} · covers {{ w.population }}{% endif -%}
+                {%- if w.period %} · {{ w.period }}{% endif -%}
+              </span>
+            {% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    </details>
+  {% endif %}
+
   {% if admin and ep.dossier %}
     <details class="plan research">
       <summary>Research — {{ ep.dossier.entries|length }} findings on how this landed</summary>

@@ -4,14 +4,37 @@
 
 <article class="setup">
   <h1>Before we build this one</h1>
-  <p class="muted">
-    {% if ep.paper_title %}<strong>{{ ep.paper_title }}</strong>{% else %}Your paper{% endif %}
-    is stored and checked. Nothing has been spent on it yet.
-  </p>
+  {% if comparison %}
+    <p class="muted">{{ papers|length }} papers, stored and checked. Nothing has
+      been spent on them yet.</p>
+  {% else %}
+    <p class="muted">
+      {% if ep.paper_title %}<strong>{{ ep.paper_title }}</strong>{% else %}Your paper{% endif %}
+      is stored and checked. Nothing has been spent on it yet.
+    </p>
+  {% endif %}
 
   {% if error %}<p class="error flash">{{ error }}</p>{% endif %}
 
   <form action="/episode/{{ ep.id }}/setup" method="post">
+    {% if comparison %}
+      <fieldset class="papers">
+        <legend>The works</legend>
+        {% for p in papers %}
+          <label class="paperrow">
+            <input type="checkbox" name="principals" value="{{ p.id }}"
+                   {{ 'checked' if p.role == 'principal' }}>
+            <span class="papername">{{ p.title }}{% if p.credit %} — {{ p.credit }}{% endif %}{% if p.year %} ({{ p.year }}){% endif %}</span>
+          </label>
+        {% endfor %}
+        <p class="hint">Ticked works are <strong>principals</strong>: looked up,
+          researched, and sent whole to every stage. Unticked ones are
+          <strong>references</strong> — read once, quoted only from that reading,
+          and listed in the show notes. Two papers that disagree should both stay
+          ticked, or the verdict tilts towards whichever one was researched.</p>
+      </fieldset>
+    {% endif %}
+
     {% for f in fields %}
       <label class="setuprow">
         <span class="setuplabel">{{ f.label }}</span>
@@ -22,6 +45,19 @@
         </select>
       </label>
     {% endfor %}
+
+    <label class="setuprow angle">
+      <span class="setuplabel">Angle <span class="muted">(optional)</span></span>
+      <textarea name="angle" rows="2"
+                placeholder="{% if comparison %}e.g. focus on the methods, not the policy conclusions{% else %}e.g. spend most of it on the identification strategy{% endif %}">{{ angle }}</textarea>
+    </label>
+
+    {% if comparison %}
+      <p class="hint"><strong>auto</strong> reads the papers first and works out
+        how they stand to each other. Worth leaving alone unless you have read
+        them and disagree — and if you pick something the papers do not support,
+        the episode keeps your choice and says so in its log.</p>
+    {% endif %}
 
     <p class="hint"><strong>Research the reception</strong> sends a grounded
       search pass before the outline: who objected, who built on it, what has

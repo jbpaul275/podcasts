@@ -13,6 +13,7 @@ PDF → ingest → script → TTS → assemble → MP3
 | Stage | What it does |
 |---|---|
 | `ingest` | SHA-256 dedupe, size/page/text-layer validation, copy into `data/papers/`, native-PDF metadata extraction |
+| `positions` | Multi-paper only. Locates what the works actually claim, checks whether they are answering the same question, and names the relation |
 | `research` | Optional. Grounded search for how the work was received — critics, extensions, what wore well |
 | `outline` | Reads the paper and plans the episode as beats, which is what decides how long it is |
 | `script` | Sends the PDF natively (so tables and figures survive) and writes the dialogue against that plan |
@@ -28,6 +29,26 @@ A **paper** is a work: a PDF, its title and authors, its citation count. An **ep
 A solo episode is one join row and reads exactly as it did before: `db.get_episode()` returns the episode merged with its principal paper, so `row["title"]` is still the paper's title. Anything that needs the full set asks `db.papers_for()`, and `db.paper_paths()` gives the PDFs to attach in order.
 
 Two consequences worth knowing. Correcting a botched title fixes it for every episode built on that paper, including re-voicings. And a re-voiced rendering *shares* its paper rather than copying the PDF, so deleting one episode only removes bytes when nothing else points at them.
+
+### Episodes about several papers
+
+Tick two or more papers in the library and hit **Compare**, or drop several PDFs at once. Either way you land in the same wizard, with two extra questions.
+
+**Roles.** A *principal* is what the episode is about: it gets a citation lookup, the research pass, and its PDF rides along to every stage. A *reference* is read once at extraction and quoted only from that reading. Two papers that disagree should both be principals — researching one and not the other tilts the verdict before the writing starts.
+
+**Relation** picks the arc, and defaults to `auto`:
+
+| | Beats |
+|---|---|
+| `conflict` | Cold open · The positions · Are they even arguing · Where it turns · The verdict · What would settle it |
+| `convergent` | Cold open · The claim · The separate routes · Why that matters · Pressure · So what |
+| `extension` | Cold open · Where it started · The opening · What was added · Pressure · So what |
+
+On `auto`, the `positions` stage reads the works and decides. Choosing by hand overrides it, and a disagreement between your choice and what the papers suggest is recorded in the stage log rather than silently resolved.
+
+The third beat of the conflict arc is the one that earns the stage. Two papers often only *look* like they disagree — different outcome variable, different population, different decade, the same word meaning two things — and a confident adjudication of a conflict that was never real is worse than no episode. When `positions` finds the works incommensurable it says so, the episode explains the mismatch instead of picking a winner, and `positioning:incommensurable` shows up in the log.
+
+Every work is listed on the episode page and in the feed's show notes. The spoken disclosure names the principals and counts the references.
 
 ## Setup
 
@@ -61,11 +82,13 @@ Papers arriving through `data/inbox/` keep processing on their own, because a fi
 
 An episode waiting on the wizard has status `draft`. It is not one of the pipeline stages, so the resume-on-startup sweep leaves it alone — starting it would spend money nobody authorised.
 
-### Two arcs
+### Arcs
 
 The seven-segment arc was built for empirical papers: it asks for an identification strategy, results with magnitudes, and a missing robustness check. Hand it a work of history or philosophy and the model dutifully manufactures quantitative framing for a book that has none — three thin, awkward segments where the interesting material is elsewhere.
 
-So there are two, in `prompts/arc_empirical.md` and `prompts/arc_theoretical.md`. The theoretical arc replaces Identification and Findings with **The move** (the conceptual shift, which is the argument's machinery) and **The case** (the historical episodes and worked examples it leans on). Cold open, Pressure, Context and So what are common to both.
+So there are two for single works, in `prompts/arc_empirical.md` and `prompts/arc_theoretical.md`. The theoretical arc replaces Identification and Findings with **The move** (the conceptual shift, which is the argument's machinery) and **The case** (the historical episodes and worked examples it leans on). Cold open, Pressure, Context and So what are common to both.
+
+Three more cover episodes about several works — `arc_conflict.md`, `arc_convergent.md`, `arc_extension.md` — described above. All five are ordinary prompts, editable in the browser, and `arc.segments()` parses the segment names back out of the same file the prompts splice, so a list in code cannot disagree with the prompt text.
 
 The metadata stage picks, returning `kind` alongside the title and authors — it has read the paper anyway. Anything unrecognised falls back to empirical, since most uploads are papers and that is the arc with mileage on it.
 
@@ -394,6 +417,8 @@ db.py                schema + queries (sqlite3 stdlib, no ORM)
 prose.py             paper metadata rendered as English, shared by web + pipeline
 pipeline/
   ingest.py          PDF in, metadata + validation out
+  arc.py             which shape an episode takes, and where it is defined
+  positions.py       several works in, a map of how they stand to each other
   script.py          paper in, dialogue script out, citation flagging
   intro.py           the spoken AI disclosure, in its own voice
   tts.py             script in, audio chunks out

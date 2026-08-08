@@ -437,8 +437,28 @@ a.tag:hover { border-color: var(--a); color: var(--a); }
 .setuprow select { width: 100%; font: inherit; }
 .setupactions { display: flex; gap: 0.6rem; flex-wrap: wrap; margin-top: 1.5rem; }
 .setup .hint { font-size: 0.8rem; color: var(--muted); line-height: 1.55; margin: 0.4rem 0 0; }
+.setuprow textarea { width: 100%; font: inherit; resize: vertical; }
+.papers { border: 1px solid var(--rule); border-radius: 8px; padding: 0.8rem 1rem 0.4rem;
+          margin: 0 0 1.4rem; }
+.papers legend { font-size: 0.8rem; font-weight: 600; padding: 0 0.35rem; }
+.paperrow { display: flex; gap: 0.55rem; align-items: baseline; margin: 0 0 0.5rem;
+            font-size: 0.88rem; line-height: 1.45; cursor: pointer; }
+.papername { flex: 1; }
 .status-draft { background: #f1eee6; color: #6f6a5e; text-decoration: none; }
 @media (prefers-color-scheme: dark) { .status-draft { background: #2b2822; color: #cfc9bb; } }
+
+/* picking several papers to read against each other */
+.pick { float: left; margin: 0.45rem 0.7rem 0 0; }
+.comparebar { position: sticky; bottom: 0; display: flex; gap: 0.6rem; align-items: center;
+              background: var(--bg); border-top: 1px solid var(--rule);
+              padding: 0.8rem 0; margin-top: 0.4rem; }
+.comparecount { font-size: 0.85rem; color: var(--muted); margin-right: auto; }
+
+/* what the episode is built on -- public, unlike the plan */
+.cited { margin-top: 1.8rem; }
+.cited h2 { font-size: 0.95rem; margin: 0 0 0.6rem; }
+.cited ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.5rem; }
+.cited li { font-size: 0.88rem; line-height: 1.5; }
 
 /* the beat sheet the script was written against */
 .plan { border: 1px solid var(--rule); border-radius: 8px; padding: 0.9rem 1.1rem; margin-top: 1.5rem; }

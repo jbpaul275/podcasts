@@ -138,7 +138,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(assemble, "FINAL_DIR", final)
 
     calls = {"metadata": 0, "script": 0, "revise": 0, "tts": 0, "intro": 0,
-             "outline": 0, "research": 0}
+             "outline": 0, "research": 0, "positions": 0}
 
     def fake_metadata(episode_id, cfg):
         calls["metadata"] += 1
@@ -170,6 +170,9 @@ def env(tmp_path, monkeypatch):
     def fake_research(episode_id, cfg):
         calls["research"] += 1
 
+    def fake_positions(episode_id, cfg):
+        calls["positions"] += 1
+
     def fake_outline(episode_id, cfg):
         calls["outline"] += 1
         import json as _json
@@ -187,18 +190,19 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(tts, "_synthesize_chunk", fake_chunk)
     monkeypatch.setattr(intro_mod, "_synthesize", fake_intro)
 
-    # run.py bound ingest.extract_metadata into STAGES at import time; rebind.
+    # Substituted by name into the real list rather than replacing it. Spelling
+    # the pipeline out here meant every new stage silently dropped out of every
+    # test that runs one, which is a fixture quietly deciding what ships.
     from pipeline import run as run_mod
+    stubs = {
+        "extracting": fake_metadata,
+        "positioning": fake_positions,
+        "researching": fake_research,
+        "outlining": fake_outline,
+    }
     monkeypatch.setattr(
         run_mod, "STAGES",
-        [
-            ("extracting", fake_metadata),
-            ("researching", fake_research),
-            ("outlining", fake_outline),
-            ("scripting", run_mod._run_scripting),
-            ("synthesizing", tts.synthesize),
-            ("assembling", assemble.assemble),
-        ],
+        [(name, stubs.get(name, fn)) for name, fn in run_mod.STAGES],
     )
 
     cfg = {
@@ -3747,3 +3751,167 @@ def test_a_paper_already_stored_is_not_stored_twice(env, tmp_path):
     episode_id = ingest.ingest_pdf(pdf, env["cfg"])
     assert db.principal_paper(episode_id)["id"] == paper_id
     assert len(list(env["papers"].glob("*.pdf"))) == 1, "no second copy"
+
+
+# --------------------------------------------------- several papers, one episode
+
+def _two_papers(env, tmp_path, client):
+    """Two solo episodes, then a comparison built from both of them."""
+    from pipeline import ingest
+
+    # Different lengths, so the two are different bytes and cannot dedupe into
+    # one paper -- which would make this test pass for the wrong reason.
+    first, second = tmp_path / "first.pdf", tmp_path / "second.pdf"
+    _make_pdf(first, pages=2)
+    _make_pdf(second, pages=3)
+    a = ingest.ingest_pdf(first, env["cfg"])
+    b = ingest.ingest_pdf(second, env["cfg"])
+    resp = client.post("/compare", data={"papers": [a, b]}, follow_redirects=False)
+    assert resp.status_code == 303
+    return a, b, resp.headers["location"].split("/")[2]
+
+
+def test_comparing_two_episodes_makes_one_draft_over_both_papers(client, env, tmp_path):
+    import db
+
+    a, b, new_id = _two_papers(env, tmp_path, client)
+    papers = db.papers_for(new_id)
+    assert [p["id"] for p in papers] == [db.principal_paper(a)["id"],
+                                         db.principal_paper(b)["id"]]
+    assert [p["position"] for p in papers] == [0, 1]
+    assert all(p["role"] == db.PRINCIPAL for p in papers)
+    assert db.get_episode(new_id)["status"] == app_status_draft()
+    assert db.paper_paths(new_id) == [db.paper_pdf(p["id"]) for p in papers]
+
+
+def app_status_draft():
+    import app as app_mod
+    return app_mod.DRAFT
+
+
+def test_a_comparison_is_not_a_sibling_of_its_own_papers(client, env, tmp_path):
+    """It shares a paper with the solo episode about that paper, and shares one
+    with the other. Neither is a re-voicing of it, so publishing it must not
+    unpublish either."""
+    import db
+
+    a, b, new_id = _two_papers(env, tmp_path, client)
+    assert db.siblings(new_id) == [], "sharing a paper is not being a version of one"
+    assert db.siblings(a) == [] and db.siblings(b) == []
+
+    db.update_episode(a, published=1)
+    db.update_episode(new_id, published=1)
+    assert db.demote_siblings(new_id) == []
+    assert db.get_episode(a)["published"] == 1, (
+        "publishing the comparison must not unpublish the solo episode")
+
+
+def test_comparing_needs_two_different_papers(client, env, tmp_path):
+    from pipeline import ingest
+
+    pdf = tmp_path / "one.pdf"
+    _make_pdf(pdf)
+    only = ingest.ingest_pdf(pdf, env["cfg"])
+    resp = client.post("/compare", data={"papers": [only, only]},
+                       follow_redirects=False)
+    assert resp.status_code == 303
+    assert "at%20least%20two" in resp.headers["location"]
+
+
+def test_the_wizard_asks_how_they_relate_only_when_there_are_several(client, env,
+                                                                    tmp_path):
+    from pipeline import ingest
+
+    pdf = tmp_path / "solo.pdf"
+    _make_pdf(pdf)
+    solo = ingest.ingest_pdf(pdf, env["cfg"])
+    body = client.get(f"/episode/{solo}/setup").text
+    assert "How they relate" not in body, "there is nothing for it to relate to"
+
+    _a, _b, new_id = _two_papers(env, tmp_path, client)
+    body = client.get(f"/episode/{new_id}/setup").text
+    assert "How they relate" in body
+    assert 'value="auto"' in body and 'value="conflict"' in body
+    assert 'name="principals"' in body, "and which works are principals"
+
+
+def test_research_starts_on_for_a_comparison(client, env, tmp_path):
+    """Whether a work was argued with is most of what makes a comparison worth
+    making, so the default flips -- unless it was explicitly turned off."""
+    import prefs
+
+    assert prefs.current(env["cfg"])["research"] == "off"
+    assert prefs.current(env["cfg"], comparison=True)["research"] == "on"
+
+    prefs.save({"research": "off"}, env["cfg"])
+    assert prefs.current(env["cfg"], comparison=True)["research"] == "off", (
+        "an explicit choice still wins")
+
+
+def test_the_wizard_records_roles_and_the_angle(client, env, tmp_path):
+    import db
+
+    a, b, new_id = _two_papers(env, tmp_path, client)
+    first = db.papers_for(new_id)[0]["id"]
+    client.post(f"/episode/{new_id}/setup",
+                data={"action": "start", "relation": "conflict",
+                      "angle": "  focus on   the methods ",
+                      "principals": [first]},
+                follow_redirects=False)
+
+    roles = {p["id"]: p["role"] for p in db.papers_for(new_id)}
+    assert roles[first] == db.PRINCIPAL
+    assert set(roles.values()) == {db.PRINCIPAL, db.REFERENCE}
+    row = db.get_episode(new_id)
+    assert row["relation"] == "conflict"
+    assert row["angle"] == "focus on the methods", "whitespace collapsed"
+
+
+def test_a_comparison_lists_its_works_on_the_page_and_in_the_feed(client, env,
+                                                                  tmp_path):
+    import db
+    from pipeline import run
+
+    _a, _b, new_id = _two_papers(env, tmp_path, client)
+    run.run_episode(new_id, env["cfg"], stop_after="scripting")
+    db.update_principal(new_id, source_url="https://example.org/first.pdf")
+    audio = tmp_path / "made-up.mp3"
+    audio.write_bytes(b"\0" * 32)
+    db.update_episode(new_id, status="done", published=1, flags_reviewed=1,
+                      audio_path=str(audio), duration_s=61.0)
+
+    body = client.get(f"/episode/{new_id}").text
+    assert "Works discussed" in body
+    assert body.count("Minimum Wages and Employment") >= 2, "both works listed"
+
+    feed = client.get("/feed.xml").text
+    assert "Works discussed:" in feed
+    assert "https://example.org/first.pdf" in feed
+
+
+def test_uploading_several_at_once_makes_one_episode_over_all_of_them(client, env,
+                                                                      tmp_path):
+    import db
+
+    first, second = tmp_path / "u1.pdf", tmp_path / "u2.pdf"
+    _make_pdf(first, pages=2)
+    _make_pdf(second, pages=3)
+    resp = client.post(
+        "/upload",
+        files=[("file", ("u1.pdf", first.read_bytes(), "application/pdf")),
+               ("file", ("u2.pdf", second.read_bytes(), "application/pdf"))],
+        follow_redirects=False)
+    assert resp.status_code == 303
+    new_id = resp.headers["location"].split("/")[2]
+    assert len(db.papers_for(new_id)) == 2
+    assert db.get_episode(new_id)["status"] == "draft"
+
+
+def test_one_file_still_goes_straight_to_the_wizard(client, env, tmp_path):
+    pdf = tmp_path / "single.pdf"
+    _make_pdf(pdf)
+    resp = client.post(
+        "/upload", files={"file": ("single.pdf", pdf.read_bytes(), "application/pdf")},
+        follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"].endswith("/setup")

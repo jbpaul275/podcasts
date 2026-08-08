@@ -11,16 +11,21 @@ import logging
 import traceback
 
 import db
-from . import PipelineError, assemble, dossier, ingest, outline, script, tts
+from . import (PipelineError, assemble, dossier, ingest, outline, positions,
+               script, tts)
 
 log = logging.getLogger("paperpod.run")
 
 # stage name -> (status while running, callable)
 STAGES: list[tuple[str, object]] = [
     ("extracting", ingest.extract_metadata),
+    # Before research, because what is worth looking up about several works is
+    # how they were received *as a disagreement*, which needs the disagreement
+    # located first. A no-op for a single-paper episode.
+    ("positioning", positions.build_positions),
     ("researching", dossier.research),
     ("outlining", outline.build_outline),
-    ("scripting", None),  # bound below; needs a post-step
+    ("scripting", None),  # bound below by name; needs a post-step
     ("synthesizing", tts.synthesize),
     ("assembling", assemble.assemble),
 ]
@@ -72,7 +77,7 @@ def _run_scripting(episode_id: str, cfg: dict) -> None:
         )
 
 
-STAGES[3] = ("scripting", _run_scripting)
+STAGES[STAGE_NAMES.index("scripting")] = ("scripting", _run_scripting)
 
 
 def resume_stage_for(status: str) -> str:

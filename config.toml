@@ -54,6 +54,13 @@ voice   = "Charon"
 # could not be established, so nobody is announced as "an uncredited author".
 template            = "This is Paperpod, an AI generated podcast with discussions of important academic papers. Today's episode is about $TITLE, by $AUTHORS."
 template_no_authors = "This is Paperpod, an AI generated podcast with discussions of important academic papers. Today's episode is about $TITLE."
+# An episode built on several works read against each other. $WORKS is every
+# principal named and credited in turn. References are not read aloud -- past
+# two or three that is a list nobody can follow -- but they are counted, and
+# every one of them is in the show notes with a link. $COUNT is how many,
+# $PAPERS is "paper" or "papers".
+template_multi      = "This is Paperpod, an AI generated podcast with discussions of important academic papers. Today's episode is about $WORKS."
+template_references = " We also drew on $COUNT further $PAPERS, listed in the show notes."
 
 # Playback speed for the disclosure, and for the disclosure only -- the hosts
 # are never touched. It is the same sentence on every episode, so a subscriber

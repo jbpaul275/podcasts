@@ -2400,3 +2400,209 @@ def test_every_attached_paper_is_sent_to_the_script_model(tmp_path, monkeypatch)
 
     assert sent == [[f"PART:{first}.pdf", f"PART:{second}.pdf"]], (
         "both papers, in running order")
+
+
+# ------------------------------------------- locating the comparison, not writing it
+
+def _positions_env(monkeypatch, tmp_path, payload, papers=2):
+    """An episode over `papers` works, with the positions call stubbed."""
+    import db
+    from pipeline import positions as positions_mod
+
+    store = tmp_path / "papers"
+    store.mkdir()
+    monkeypatch.setattr(db, "PAPERS_DIR", store)
+
+    ids = [db.create_paper(source_path=f"/tmp/{i}.pdf", sha256=f"sha-p{i}")
+           for i in range(papers)]
+    db.create_episode("ECMP", "/tmp/0.pdf", None, papers=ids)
+    for paper_id in ids:
+        db.paper_pdf(paper_id).write_bytes(b"%PDF-1.4 fake")
+
+    class Resp:
+        text = json.dumps(payload)
+        usage_metadata = None
+        candidates = []
+
+    seen = {}
+
+    def fake_generate_content(*, model, contents, config):
+        seen["parts"] = [c for c in contents if str(c).startswith("PART:")]
+        return Resp()
+
+    monkeypatch.setattr(positions_mod, "client",
+                        lambda: type("C", (), {"models": type("M", (), {
+                            "generate_content": staticmethod(fake_generate_content)})()})())
+    monkeypatch.setattr(positions_mod, "pdf_part", lambda p: f"PART:{p.name}")
+    cfg = {"models": {"script": "m"}, "script": {},
+           "retry": {"attempts": 1, "base_delay_s": 0, "max_delay_s": 0}}
+    return cfg, seen
+
+
+_CONFLICT = {
+    "question": "Does a minimum wage cost jobs?",
+    "papers": [
+        {"title": "Card and Krueger", "claim": "No measurable job loss.",
+         "construct": "teen employment", "population": "New Jersey fast food",
+         "period": "1992"},
+        {"title": "Neumark and Wascher", "claim": "Employment falls.",
+         "construct": "teen employment", "population": "same restaurants",
+         "period": "1992"},
+    ],
+    "commensurable": True,
+    "why": "Same outcome, same firms, same year.",
+    "crux": "Whether payroll records or a phone survey measured employment.",
+    "relation": "conflict",
+    "relation_why": "They give opposite answers to one question.",
+}
+
+
+def test_positioning_settles_the_relation_when_it_was_left_on_auto(monkeypatch,
+                                                                   tmp_path):
+    import db
+    from pipeline import positions as positions_mod
+
+    cfg, seen = _positions_env(monkeypatch, tmp_path, _CONFLICT)
+    db.update_episode("ECMP", relation="auto")
+    positions_mod.build_positions("ECMP", cfg)
+
+    row = db.get_episode("ECMP")
+    assert row["relation"] == "conflict"
+    assert len(seen["parts"]) == 2, "both works go into the one call"
+    stored = positions_mod.stored(row)
+    assert stored["crux"].startswith("Whether payroll records")
+
+
+def test_a_relation_chosen_by_hand_is_kept_and_the_disagreement_logged(monkeypatch,
+                                                                      tmp_path):
+    """Whoever picked it has read both papers. But a model that read them and
+    concluded otherwise is worth being able to see afterwards."""
+    import db
+    from pipeline import positions as positions_mod
+
+    cfg, _ = _positions_env(monkeypatch, tmp_path, _CONFLICT)
+    db.update_episode("ECMP", relation="convergent")
+    positions_mod.build_positions("ECMP", cfg)
+
+    assert db.get_episode("ECMP")["relation"] == "convergent", "your choice stands"
+    logged = [r for r in db.get_stage_log("ECMP") if r["stage"] == "positioning:relation"]
+    assert logged and "suggests conflict" in logged[0]["detail"]
+
+
+def test_works_that_are_not_arguing_are_flagged_and_not_adjudicated(monkeypatch,
+                                                                    tmp_path):
+    """The failure this stage exists for. A confident verdict on a
+    disagreement that was an artefact of comparing unlike things is worse than
+    no episode."""
+    import db
+    from pipeline import positions as positions_mod
+
+    payload = dict(_CONFLICT, commensurable=False, crux="",
+                   why="One measures teenagers, the other measures all workers.")
+    cfg, _ = _positions_env(monkeypatch, tmp_path, payload)
+    positions_mod.build_positions("ECMP", cfg)
+
+    row = db.get_episode("ECMP")
+    flagged = [r for r in db.get_stage_log("ECMP")
+               if r["stage"] == "positioning:incommensurable"]
+    assert flagged, "an episode built on a false conflict has to announce itself"
+
+    brief = positions_mod.as_brief(positions_mod.stored(row))
+    assert "NOT ANSWERING THE SAME QUESTION" in brief
+    assert "Do not adjudicate" in brief
+
+
+def test_a_missing_commensurability_check_reads_as_unchecked(monkeypatch, tmp_path):
+    """Absent is not true. The whole value of the field is that it was looked
+    at, so silence has to fall the cautious way."""
+    from pipeline import positions as positions_mod
+
+    payload = {k: v for k, v in _CONFLICT.items() if k != "commensurable"}
+    cfg, _ = _positions_env(monkeypatch, tmp_path, payload)
+    positions_mod.build_positions("ECMP", cfg)
+    assert positions_mod.stored(__import__("db").get_episode("ECMP"))["commensurable"] is False
+
+
+def test_positioning_is_fatal_rather_than_skipped(monkeypatch, tmp_path):
+    """Unlike research. An episode about several papers with no idea how they
+    relate would be written on a first impression of two PDFs at once, which is
+    the thing this stage replaces."""
+    import pytest
+
+    from pipeline import PipelineError, positions as positions_mod
+
+    cfg, _ = _positions_env(monkeypatch, tmp_path, {"papers": []})
+    with pytest.raises(PipelineError):
+        positions_mod.build_positions("ECMP", cfg)
+
+
+def test_a_single_paper_episode_skips_positioning(monkeypatch, tmp_path):
+    import db
+    from pipeline import positions as positions_mod
+
+    cfg, seen = _positions_env(monkeypatch, tmp_path, _CONFLICT, papers=1)
+    positions_mod.build_positions("ECMP", cfg)
+    assert "parts" not in seen, "nothing to compare, so nothing is spent"
+    assert positions_mod.stored(db.get_episode("ECMP")) is None
+
+
+def test_the_arc_comes_from_the_relation_only_when_there_are_several(_isolated_db):
+    import db
+    from pipeline import arc
+
+    db.create_episode("EARC", "/tmp/a.pdf", "sha-arc")
+    db.update_principal("EARC", work_kind="theoretical")
+    db.update_episode("EARC", relation="convergent")
+    row = db.get_episode("EARC")
+
+    assert arc.of(row, 1) == arc.THEORETICAL, "one work: its own shape"
+    assert arc.of(row, 2) == arc.CONVERGENT, "several: how they stand"
+    assert "Are they even arguing" in arc.text(arc.CONFLICT)
+    assert arc.segments(arc.CONFLICT)[0] == "Cold open"
+    assert len(arc.segments(arc.CONVERGENT)) == 6
+
+
+def test_an_unreadable_relation_falls_to_the_arc_that_can_say_no(_isolated_db):
+    """Conflict is the only arc with a commensurability beat, so it is the one
+    that can conclude "these do not actually disagree" and still work."""
+    from pipeline import arc
+
+    assert arc.clean_relation("nonsense") == arc.CONFLICT
+    assert arc.clean_relation(None) == arc.CONFLICT
+    assert arc.clean_relation("extension") == arc.EXTENSION
+
+
+def test_the_disclosure_names_every_principal_and_counts_the_rest(_isolated_db):
+    """References are never read aloud -- past two or three that is a list
+    nobody can follow -- but the disclosure still has to say the episode drew
+    on them, and the show notes carry each one."""
+    import db
+    from pipeline import intro
+
+    ids = [db.create_paper(source_path=f"/tmp/{i}.pdf", sha256=f"sha-i{i}")
+           for i in range(3)]
+    db.create_episode("EMULTIINTRO", "/tmp/0.pdf", None, papers=ids)
+    db.update_paper(ids[0], title="Minimum Wages and Employment",
+                    authors=json.dumps(["David Card", "Alan Krueger"]))
+    db.update_paper(ids[1], title="Employment Effects Reconsidered",
+                    authors=json.dumps(["David Neumark"]))
+    db.update_paper(ids[2], title="A Third Thing", authors=json.dumps(["Someone"]))
+    db.attach_paper("EMULTIINTRO", ids[2], position=2, role=db.REFERENCE)
+
+    cfg = {"intro": {"enabled": True}}
+    text = intro.intro_text(db.get_episode("EMULTIINTRO"), cfg)
+    assert "Minimum Wages and Employment, by David Card and Alan Krueger" in text
+    assert "; and Employment Effects Reconsidered, by David Neumark" in text
+    assert "A Third Thing" not in text, "references are not read out"
+    assert "1 further paper, listed in the show notes" in text
+
+
+def test_one_paper_still_gets_the_single_work_disclosure(_isolated_db):
+    import db
+    from pipeline import intro
+
+    db.create_episode("ESOLOINTRO", "/tmp/s.pdf", "sha-solo")
+    db.update_principal("ESOLOINTRO", title="A Paper",
+                        authors=json.dumps(["Solo Author"]))
+    text = intro.intro_text(db.get_episode("ESOLOINTRO"), {"intro": {"enabled": True}})
+    assert text.endswith("Today's episode is about A Paper, by Solo Author.")

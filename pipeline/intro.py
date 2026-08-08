@@ -44,6 +44,18 @@ DEFAULT_TEMPLATE_NO_AUTHORS = (
     "This is Paperpod, an AI generated podcast with discussions of important "
     "academic papers. Today's episode is about $TITLE."
 )
+# Several works read against each other. $WORKS is each principal named and
+# credited in turn, so the disclosure still says what the episode is drawing on
+# -- which is the whole point of it -- without reading out a bibliography.
+DEFAULT_TEMPLATE_MULTI = (
+    "This is Paperpod, an AI generated podcast with discussions of important "
+    "academic papers. Today's episode is about $WORKS."
+)
+# References are not named aloud. Past two or three works that becomes a list
+# nobody can follow, and the show notes carry every one of them with a link.
+DEFAULT_TEMPLATE_REFERENCES = (
+    " We also drew on $COUNT further $PAPERS, listed in the show notes."
+)
 DEFAULT_VOICE = "Charon"
 
 # Style direction for the announcer. Kept away from the disclosure text itself
@@ -63,13 +75,44 @@ def _voice(cfg: dict) -> str:
     return (cfg.get("intro", {}).get("voice") or DEFAULT_VOICE).strip() or DEFAULT_VOICE
 
 
-def intro_text(ep, cfg: dict) -> str | None:
-    """The disclosure as it will be spoken, or None when disabled. Takes the
-    episode row rather than an id: the library renders one of these per row."""
+def _credit_one(paper) -> str:
+    """One work, named and credited, as the announcer says it."""
+    title = decaps((paper["title"] or "").strip()) or "an untitled paper"
+    authors = db.episode_authors(paper)
+    return f"{title}, by {author_credit(authors)}".rstrip(",. ") if authors else title
+
+
+def _join(parts: list[str]) -> str:
+    if len(parts) == 1:
+        return parts[0]
+    return f"{'; '.join(parts[:-1])}; and {parts[-1]}"
+
+
+def intro_text(ep, cfg: dict, papers=None) -> str | None:
+    """The disclosure as it will be spoken, or None when disabled.
+
+    Takes the episode row rather than an id: the library renders one of these
+    per row. `papers` is looked up when not supplied, so a caller that already
+    has them does not pay for the query twice.
+    """
     if not enabled(cfg) or ep is None:
         return None
 
     icfg = cfg.get("intro", {})
+    if papers is None:
+        try:
+            papers = db.papers_for(ep["id"])
+        except (IndexError, KeyError, TypeError):
+            papers = []
+    principals = [p for p in papers if p["role"] == db.PRINCIPAL]
+    references = [p for p in papers if p["role"] != db.PRINCIPAL]
+
+    if len(principals) > 1:
+        # Several works, so there is no single title to announce.
+        template = icfg.get("template_multi") or DEFAULT_TEMPLATE_MULTI
+        text = template.replace("$WORKS", _join([_credit_one(p) for p in principals]))
+        return _tidy(text, icfg, references)
+
     title = decaps((ep["title"] or "").strip()) or "an untitled paper"
     authors = db.episode_authors(ep)
     if authors:
@@ -80,6 +123,15 @@ def intro_text(ep, cfg: dict) -> str | None:
         credit = ""
 
     text = template.replace("$TITLE", title).replace("$AUTHORS", credit)
+    return _tidy(text, icfg, references)
+
+
+def _tidy(text: str, icfg: dict, references: list) -> str:
+    if references:
+        tail = icfg.get("template_references") or DEFAULT_TEMPLATE_REFERENCES
+        text = text.rstrip() + (
+            tail.replace("$COUNT", str(len(references)))
+                .replace("$PAPERS", "paper" if len(references) == 1 else "papers"))
     # "Smith et al." already ends a sentence, so the template's own full stop
     # would double it. Collapse a bare pair only -- an ellipsis in a title is
     # a legitimate three.

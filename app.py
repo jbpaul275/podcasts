@@ -18,7 +18,7 @@ from pathlib import Path
 from urllib.parse import quote, urlencode, urlparse
 from xml.sax.saxutils import escape as xml_escape
 
-from fastapi import FastAPI, Form, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import (
     FileResponse,
     HTMLResponse,
@@ -57,8 +57,10 @@ from pipeline import (
     ingest,
     intro as intro_mod,
     run,
+    arc as arc_mod,
     dossier as dossier_mod,
     outline as outline_mod,
+    positions as positions_mod,
     script as script_mod,
     tts as tts_mod,
 )
@@ -601,6 +603,9 @@ def _episode_view(row) -> dict:
         "grounding": db.grounding(row),
         "outline": _outline_view(row),
         "dossier": dossier_mod.stored(row),
+        "papers": _paper_rows(row["id"]),
+        "positions": positions_mod.stored(row),
+        "relation": row["relation"] if row["relation"] != arc_mod.AUTO else None,
         "script_md_present": bool(row["script_md"]),
         "summary": _blurb(row),
         "categories": cats,
@@ -1288,49 +1293,181 @@ def _render_library(request: Request, admin_mode: bool, error: str = "",
     )
 
 
+def _store_upload(upload: UploadFile) -> tuple[str | None, bool, str | None]:
+    """Stage one uploaded PDF and register it.
+
+    Returns (episode id, whether it was already in the library, error). A
+    duplicate is not an error: the paper is here, which is all a caller needs
+    to know to go on using it.
+    """
+    staged = INBOX_DIR / f"upload-{db.new_ulid()}.pdf"
+    with open(staged, "wb") as out:
+        shutil.copyfileobj(upload.file, out)
+    try:
+        return ingest.ingest_pdf(staged, CFG, status=DRAFT), False, None
+    except DuplicateEpisode as e:
+        return e.episode_id, True, None
+    except PipelineError as e:
+        return None, False, f"{upload.filename}: {e}"
+    finally:
+        _move_to_processed(staged)
+
+
 @app.post("/upload")
-async def upload(request: Request, file: UploadFile):
-    """Validate and store the PDF, then hand over to the wizard.
+async def upload(request: Request, file: list[UploadFile] = File(...)):
+    """Validate and store the PDFs, then hand over to the wizard.
 
     Nothing is spent here. An upload used to start the whole pipeline on the
     configured defaults, which is the wrong moment to commit: the choices that
     shape an episode are easiest to make with the paper in front of you, and
     hardest to change once the audio has been paid for.
+
+    Several files at once make one episode over all of them, which is the
+    convenience path -- the comparison you usually want is between a paper
+    already in the library and a new one, and that is what /compare is for.
     """
     require_admin(request)
-    if not (file.filename or "").lower().endswith(".pdf"):
-        raise HTTPException(400, "only .pdf files are accepted")
-    staged = INBOX_DIR / f"upload-{db.new_ulid()}.pdf"
-    with open(staged, "wb") as out:
-        shutil.copyfileobj(file.file, out)
+    for one in file:
+        if not (one.filename or "").lower().endswith(".pdf"):
+            raise HTTPException(400, "only .pdf files are accepted")
+    if not file:
+        raise HTTPException(400, "no file uploaded")
+
+    made, dupes, errors = [], set(), []
+    for one in file:
+        episode_id, known, error = _store_upload(one)
+        if error:
+            errors.append(error)
+        elif episode_id:
+            made.append(episode_id)
+            if known:
+                dupes.add(episode_id)
+
+    if not made:
+        return RedirectResponse(
+            f"/admin?error={quote('; '.join(errors) or 'nothing was uploaded')}",
+            status_code=303)
+    if len(made) == 1:
+        # Show the episode it landed as, rather than bouncing to a page that
+        # looks unchanged.
+        if made[0] in dupes:
+            return RedirectResponse(f"/episode/{made[0]}?dup=1", status_code=303)
+        return RedirectResponse(f"/episode/{made[0]}/setup", status_code=303)
+    # Several. Errors are dropped rather than reported, because the episode
+    # that did get made is the more useful thing to be looking at; the papers
+    # that bounced are in the failures list with their reasons.
+    return compare_papers(request, papers=made)
+
+
+# The API stops at 1000 pages per request, and every paper in a comparison
+# rides along in the same call.
+COMBINED_MAX_PAGES = ingest.API_MAX_PAGES
+
+
+def _page_count(path: Path) -> int:
     try:
-        episode_id = ingest.ingest_pdf(staged, CFG, status=DRAFT)
-        _move_to_processed(staged)
-    except DuplicateEpisode as e:
-        # Not a failure: this paper is already in the library. Show the episode
-        # it landed as, rather than bouncing to a page that looks unchanged.
-        _move_to_processed(staged)
-        return RedirectResponse(f"/episode/{e.episode_id}?dup=1", status_code=303)
-    except PipelineError as e:
-        _move_to_processed(staged)
-        return RedirectResponse(f"/admin?error={quote(str(e))}", status_code=303)
+        import fitz
+
+        with fitz.open(path) as doc:
+            return doc.page_count
+    except Exception:
+        log.warning("could not count pages in %s", path)
+        return 0
+
+
+def _too_many_pages(paper_ids: list[str]) -> str | None:
+    """Why these papers cannot go in one request, or None.
+
+    Each was checked against [script] max_pages on its own way in. Nothing has
+    ever checked the total, and the total is what the API sees.
+    """
+    counts = [(pid, _page_count(db.paper_pdf(pid))) for pid in paper_ids]
+    total = sum(n for _, n in counts)
+    if total <= COMBINED_MAX_PAGES:
+        return None
+    biggest = max(counts, key=lambda c: c[1])[1]
+    return (f"these come to {total} pages together; the API takes "
+            f"{COMBINED_MAX_PAGES} in one request. The largest is {biggest} "
+            "pages — drop one, or compare fewer at a time.")
+
+
+@app.post("/compare")
+def compare_papers(request: Request, papers: list[str] = Form([])):
+    """Start an episode that reads several papers against each other.
+
+    Built from episodes already in the library rather than from a fresh upload.
+    The comparison you actually want is usually between something done last
+    month and something found today, and re-uploading to get there would only
+    land back on the same paper by hash.
+    """
+    require_admin(request)
+    chosen, seen = [], set()
+    for episode_id in papers:
+        for paper in db.papers_for(episode_id):
+            if paper["id"] not in seen:
+                seen.add(paper["id"])
+                chosen.append(paper["id"])
+    if len(chosen) < 2:
+        return RedirectResponse(
+            "/admin?error=" + quote("pick at least two different papers to compare"),
+            status_code=303)
+
+    if blocker := _too_many_pages(chosen):
+        return RedirectResponse(f"/admin?error={quote(blocker)}", status_code=303)
+
+    episode_id = db.new_ulid()
+    first = db.get_paper(chosen[0])
+    # No sha256 on the episode: it is not a rendering of any one of these, and
+    # a hash here would make it a false sibling of the solo episode about the
+    # paper that happened to be first.
+    db.create_episode(episode_id, first["source_path"] or "(comparison)", None,
+                      status=DRAFT, papers=[])
+    for position, paper_id in enumerate(chosen):
+        db.attach_paper(episode_id, paper_id, position=position,
+                        role=db.PRINCIPAL)
+    log.info("episode %s compares %d papers", episode_id, len(chosen))
     return RedirectResponse(f"/episode/{episode_id}/setup", status_code=303)
+
+
+def _paper_rows(episode_id: str) -> list[dict]:
+    """The works an episode is built from, for the wizard and the episode page."""
+    out = []
+    for paper in db.papers_for(episode_id):
+        authors = db.episode_authors(paper)
+        out.append({
+            "id": paper["id"],
+            "title": _decaps((paper["title"] or "").strip()) or "(untitled)",
+            "authors": authors,
+            "credit": _author_credit(authors),
+            "year": paper["year"],
+            "role": paper["role"],
+            "source_url": safe_url(paper["source_url"]),
+            "cited_by": paper["cited_by"],
+        })
+    return out
 
 
 def _setup_view(request: Request, row, chosen: dict, error: str = "",
                 status_code: int = 200):
+    papers = _paper_rows(row["id"])
+    comparison = len(papers) > 1
+    shown = prefs.visible(comparison)
     return templates.TemplateResponse(
         request, "setup.html",
         {"admin": True, "signed_in": True, "ep": _episode_view(row),
+         "papers": papers, "comparison": comparison,
+         "roles": list(db.ROLES),
+         "angle": (row["angle"] or ""),
          "spans": {name: f"{lo}\u2013{hi} min" for name, (lo, hi)
                    in ((n, outline_mod.policy_range(CFG, n))
                        for n in prefs.choices(CFG)["length_policy"])},
          "fields": [{"name": f, "label": prefs.LABELS[f],
                      "value": chosen.get(f, ""),
-                     "options": opts,
+                     "options": prefs.choices(CFG)[f],
                      "default": prefs.defaults(CFG).get(f, "")}
-                    for f, opts in prefs.choices(CFG).items()],
-         "is_default": chosen == prefs.defaults(CFG),
+                    for f in shown],
+         "is_default": all(chosen.get(f) == prefs.defaults(CFG).get(f)
+                           for f in shown),
          "error": error,
          "feed_title": CFG.get("feed", {}).get("title", "Paperpod")},
         status_code=status_code,
@@ -1345,7 +1482,9 @@ def episode_setup(request: Request, episode_id: str):
     row = db.get_episode(episode_id)
     if not row:
         raise HTTPException(404, "no such episode")
-    return _setup_view(request, row, prefs.for_episode(row, CFG))
+    comparison = len(db.papers_for(episode_id)) > 1
+    return _setup_view(request, row,
+                       prefs.for_episode(row, CFG, comparison=comparison))
 
 
 @app.post("/episode/{episode_id}/setup", response_class=HTMLResponse)
@@ -1354,11 +1493,14 @@ def episode_setup_save(request: Request, episode_id: str,
                        metadata_model: str = Form(""), script_model: str = Form(""),
                        tts_model: str = Form(""), voice_a: str = Form(""),
                        voice_b: str = Form(""), length_policy: str = Form(""),
-                       research: str = Form("")):
+                       research: str = Form(""), relation: str = Form(""),
+                       angle: str = Form(""), principals: list[str] = Form([])):
     require_admin(request)
     row = db.get_episode(episode_id)
     if not row:
         raise HTTPException(404, "no such episode")
+    papers = db.papers_for(episode_id)
+    comparison = len(papers) > 1
 
     if action == "reset":
         # Back to what config.toml says, and re-render rather than starting --
@@ -1369,13 +1511,27 @@ def episode_setup_save(request: Request, episode_id: str,
     picked = {"metadata_model": metadata_model, "script_model": script_model,
               "tts_model": tts_model, "voice_a": voice_a, "voice_b": voice_b,
               "length_policy": length_policy, "research": research}
+    if comparison:
+        picked["relation"] = relation
     try:
         # Remembered for next time as well as applied here: the wizard should
         # get out of the way once it has been answered once.
-        effective = prefs.save(picked, CFG)
+        effective = prefs.save(picked, CFG, comparison=comparison)
     except ValueError as e:
         return _setup_view(request, row, picked, error=str(e), status_code=400)
 
+    if comparison:
+        # Roles decide how much attention and money each work gets: a principal
+        # is looked up and researched and its PDF rides along to every stage, a
+        # reference is read once and quoted from that reading. At least one
+        # principal, or there is no episode.
+        wanted = {p for p in principals} or {papers[0]["id"]}
+        for position, paper in enumerate(papers):
+            db.attach_paper(episode_id, paper["id"], position=position,
+                            role=db.PRINCIPAL if paper["id"] in wanted
+                            else db.REFERENCE)
+
+    db.update_episode(episode_id, angle=" ".join(angle.split()) or None)
     prefs.apply_to_episode(episode_id, effective)
     if row["status"] == DRAFT:
         db.update_episode(episode_id, status="queued")
@@ -1730,7 +1886,23 @@ def feed():
         blurb = _blurb(row)
         if blurb:
             summary += "\n\n" + blurb
-        if source := safe_url(row["source_url"]):
+        papers = _paper_rows(row["id"])
+        if len(papers) > 1:
+            # The show notes are where a multi-paper episode's basis actually
+            # lives: references are never named aloud, and the attribution line
+            # can only carry one work.
+            lines = []
+            for p in papers:
+                entry = p["title"]
+                if p["credit"]:
+                    entry += f" — {p['credit']}"
+                if p["year"]:
+                    entry += f" ({p['year']})"
+                if p["source_url"]:
+                    entry += f"\n  {p['source_url']}"
+                lines.append(entry)
+            summary += "\n\nWorks discussed:\n" + "\n".join(lines)
+        elif source := safe_url(row["source_url"]):
             summary += f"\n\nSource paper: {source}"
         try:
             pub = datetime.fromisoformat(row["created_at"])

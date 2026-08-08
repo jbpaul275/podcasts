@@ -214,6 +214,22 @@ def _dossier_brief(ep) -> str:
     )
 
 
+def _positions_brief(ep) -> str:
+    """How the works stand to each other, for an episode about several."""
+    from . import positions as positions_mod
+
+    data = positions_mod.stored(ep) if ep is not None else None
+    if not data:
+        return ""
+    return (
+        "\n\nHOW THESE WORKS STAND TO EACH OTHER — worked out by reading all of "
+        "them side by side, before this script was planned. Every position below "
+        "is the strongest version of itself; argue against the strong version or "
+        "not at all.\n\n"
+        + positions_mod.as_brief(data)
+    )
+
+
 def _brief(ep) -> str:
     """The beat sheet, or a line saying there is not one."""
     from . import outline as outline_mod
@@ -263,6 +279,18 @@ def generate_script(episode_id: str, cfg: dict, instructions: str | None = None,
         .replace("$OUTLINE", _brief(ep))
         .replace("$RESEARCH", _dossier_brief(ep))
     )
+    user += _positions_brief(ep)
+    angle = ""
+    try:
+        angle = (ep["angle"] or "").strip() if ep else ""
+    except (IndexError, KeyError, TypeError):
+        angle = ""
+    if angle:
+        user += (
+            "\n\nTHE ANGLE ASKED FOR — what this episode is meant to be about. "
+            "It sets the emphasis; it does not license going beyond the works or "
+            "past the hard constraints:\n" + angle
+        )
     if instructions and instructions.strip():
         user += (
             "\n\nADDITIONAL DIRECTION FROM THE EDITOR — these take precedence "
@@ -279,7 +307,7 @@ def _write_script(episode_id: str, cfg: dict, user: str, model: str | None,
         raise PipelineError(f"no source PDF stored for episode {episode_id}")
 
     system = load_prompt("script_system.md").replace(
-        "$ARC", arc_mod.text(arc_mod.kind_of(db.get_episode(episode_id))))
+        "$ARC", arc_mod.text(arc_mod.of(db.get_episode(episode_id), len(paths))))
     if cfg.get("script", {}).get("grounding"):
         system += "\n\n" + load_prompt("script_grounding.md")
     gen_cfg = _script_config(cfg, system)

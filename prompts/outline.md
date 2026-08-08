@@ -1,4 +1,4 @@
-You are planning one episode of a two-host podcast that discusses a single academic paper for a curious lay audience. Read the attached paper and return a beat sheet.
+You are planning one episode of a two-host podcast for a curious lay audience. One or more academic works are attached. Read all of them and return a beat sheet.
 
 You are not writing dialogue. You are deciding what this episode is made of, and therefore how long it is.
 
