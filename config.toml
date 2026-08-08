@@ -33,8 +33,19 @@ voice   = "Charon"
 # $TITLE is the paper's title, $AUTHORS its credit ("Smith and Jones",
 # "Smith et al."). The no-authors variant is used when the paper's authorship
 # could not be established, so nobody is announced as "an uncredited author".
-template            = "This is a Paperpod, an AI generated podcast with discussions of important academic papers. Today's episode is about $TITLE, by $AUTHORS."
-template_no_authors = "This is a Paperpod, an AI generated podcast with discussions of important academic papers. Today's episode is about $TITLE."
+template            = "This is Paperpod, an AI generated podcast with discussions of important academic papers. Today's episode is about $TITLE, by $AUTHORS."
+template_no_authors = "This is Paperpod, an AI generated podcast with discussions of important academic papers. Today's episode is about $TITLE."
+
+# Playback speed for the disclosure, and for the disclosure only -- the hosts
+# are never touched. It is the same sentence on every episode, so a subscriber
+# on their fifth one wants it over with; the conversation is what they came
+# for and reads at its own pace.
+#
+# Applied with ffmpeg's atempo at assembly, which stretches time without moving
+# pitch, so it still sounds like the same person. Being an assembly step rather
+# than a synthesis one, changing it is a free rebuild instead of another TTS
+# call. 1.0 leaves it alone; the usable range is 0.5 to 2.0.
+speed = 1.25
 
 [script]
 target_words = 1600

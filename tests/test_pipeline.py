@@ -1284,7 +1284,7 @@ def test_intro_uses_one_voice_that_is_neither_host(_isolated_db, monkeypatch):
     assert speech.voice_config.prebuilt_voice_config.voice_name not in (
         cfg["voices"]["host_a"], cfg["voices"]["host_b"]
     ), "an announcer in a host's voice does not read as a handoff"
-    assert "This is a Paperpod" in captured["contents"]
+    assert "This is Paperpod" in captured["contents"]
     assert intro.wav_path("EINTRO5").exists()
 
 
@@ -1350,7 +1350,7 @@ def test_shipped_intro_template_reads_as_a_sentence(_isolated_db):
 
     cfg = load_config()
     text = intro.intro_text(db.get_episode("EINTRO7"), cfg)
-    assert text.startswith("This is a Paperpod, an AI generated podcast")
+    assert text.startswith("This is Paperpod, an AI generated podcast")
     assert text.endswith("Today's episode is about Some Important Paper, by Ada Lovelace.")
     assert "$" not in text, "every placeholder must have been substituted"
 
@@ -1715,3 +1715,16 @@ def test_a_plain_error_still_describes_itself():
     from pipeline import gemini
 
     assert gemini.describe(ValueError("bad argument")) == "ValueError: bad argument"
+
+
+def test_the_shipped_intro_speed_is_applied_only_to_the_intro():
+    """A speed on the whole episode would be a different feature entirely."""
+    from config import load_config
+    from pipeline.assemble import _intro_speed
+
+    cfg = load_config()
+    assert cfg["intro"]["speed"] > 1.0, "the disclosure is shipped shortened"
+    assert _intro_speed(cfg) == cfg["intro"]["speed"]
+    assert "speed" not in cfg["audio"], (
+        "the hosts read at their own pace; this knob is the disclosure's alone"
+    )
