@@ -1992,3 +1992,129 @@ def test_a_retry_window_reads_as_a_duration():
     assert human_delay(90) == "1m"
     assert human_delay(0) == ""
     assert human_delay(None) == ""
+
+
+# ------------------------------------------------- the outline stage
+
+_OUT_CFG = {
+    "models": {"script": "pro"},
+    "script": {"target_words": 1600, "words_per_minute": 160,
+               "fallback_model": "flash",
+               "lengths": {"auto": [5, 30], "short": [5, 10], "long": [18, 30]}},
+}
+
+
+def _beats(*pairs):
+    return {"why": "because", "beats": [
+        {"segment": seg, "covers": "something", "facts": [], "words": words}
+        for seg, words in pairs]}
+
+
+def test_length_is_what_the_beats_add_up_to(_isolated_db):
+    """The whole point: nobody picks a duration, so a thin paper is short and
+    a rich one is long without either being padded or compressed."""
+    from pipeline import outline
+
+    thin = _beats(("Cold open", 200), ("Findings", 700), ("Pressure", 300))
+    rich = _beats(("Cold open", 300), ("Setup", 700), ("Identification", 900),
+                  ("Findings", 1200), ("Pressure", 700), ("Context", 500),
+                  ("So what", 400))
+
+    assert outline.resolve_length(thin, _OUT_CFG, "auto")[0] == 1200   # ~8 min
+    assert outline.resolve_length(rich, _OUT_CFG, "auto")[0] == 4700   # ~29 min
+
+
+def test_a_length_outside_the_range_is_clamped_and_said_so(_isolated_db):
+    """A model asked for a number will occasionally return one nobody
+    budgeted for, and an episode's length is real money and real daily quota."""
+    from pipeline import outline
+
+    absurd = _beats(("Findings", 20000))
+    words, note = outline.resolve_length(absurd, _OUT_CFG, "auto")
+    assert words == 30 * 160
+    assert "above the 30 minute ceiling" in note
+
+    tiny = _beats(("Cold open", 100))
+    words, note = outline.resolve_length(tiny, _OUT_CFG, "auto")
+    assert words == 5 * 160
+    assert "below the 5 minute floor" in note
+
+
+def test_a_policy_narrows_the_range_rather_than_fixing_a_number(_isolated_db):
+    """"short" is not "exactly eight minutes" -- the outline still decides the
+    shape, inside a band."""
+    from pipeline import outline
+
+    assert outline.policy_range(_OUT_CFG, "short") == (5, 10)
+    assert outline.policy_range(_OUT_CFG, "long") == (18, 30)
+    assert outline.policy_range(_OUT_CFG, "nonsense") == (5, 30), "falls back to auto"
+
+    middling = _beats(("Findings", 2400))          # 15 min
+    assert outline.resolve_length(middling, _OUT_CFG, "short")[0] == 10 * 160
+    assert outline.resolve_length(middling, _OUT_CFG, "long")[0] == 18 * 160
+    assert outline.resolve_length(middling, _OUT_CFG, "auto")[0] == 2400
+
+
+def test_a_malformed_outline_is_rejected_not_half_used(_isolated_db):
+    """Half a beat sheet would silently produce half an episode."""
+    from pipeline import outline
+
+    with pytest.raises(ValueError):
+        outline._parse('{"beats": []}')
+    with pytest.raises(ValueError):
+        outline._parse('"not an object"')
+    with pytest.raises(ValueError, match="none were usable"):
+        outline._parse('{"beats": [{"segment": "Nonsense", "covers": "x"}]}')
+
+
+def test_segment_names_are_canonicalised(_isolated_db):
+    """"Cold Open" and "Cold open" grouping separately would quietly make two
+    segments out of one."""
+    from pipeline import outline
+
+    parsed = outline._parse(
+        '{"beats": [{"segment": "cold OPEN", "covers": "x", "words": 200}]}')
+    assert parsed["beats"][0]["segment"] == "Cold open"
+
+
+def test_the_brief_carries_the_facts_that_must_land(_isolated_db):
+    """This is what stops the script wandering: not "cover the findings" but
+    the specific number it has to reach."""
+    from pipeline import outline
+
+    plan = {"why": "", "beats": [
+        {"segment": "Findings", "covers": "The employment effect",
+         "facts": ["about three percent, a fifth of the raw gap"], "words": 400}]}
+    brief = outline.as_brief(plan)
+    assert "Findings:" in brief
+    assert "(400 words)" in brief
+    assert "must land: about three percent" in brief
+
+
+def test_a_script_without_an_outline_still_has_a_length(_isolated_db):
+    """Episodes built before this stage existed, and any retry that skips it,
+    must not fall through to zero."""
+    import db
+    from pipeline import script
+
+    db.create_episode("ENOOUT", "/tmp/n.pdf", "sha-noout")
+    row = db.get_episode("ENOOUT")
+    assert script._target_words(row, _OUT_CFG) == 1600
+    assert "No beat sheet" in script._brief(row)
+
+    db.update_episode("ENOOUT", target_words=2400)
+    assert script._target_words(db.get_episode("ENOOUT"), _OUT_CFG) == 2400
+
+
+def test_the_two_prompts_agree_on_the_arc():
+    """The segment names live in three places -- the outline prompt, the script
+    prompt and outline.SEGMENTS. Drift between them would have the writer
+    ignoring beats it does not recognise."""
+    from pipeline.outline import SEGMENTS
+
+    root = Path(__file__).resolve().parents[1] / "prompts"
+    plan = root.joinpath("outline.md").read_text()
+    write = root.joinpath("script_system.md").read_text()
+    for segment in SEGMENTS:
+        assert segment.casefold() in plan.casefold(), f"{segment} missing from outline.md"
+        assert segment.casefold() in write.casefold(), f"{segment} missing from script_system.md"

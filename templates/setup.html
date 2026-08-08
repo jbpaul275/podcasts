@@ -17,11 +17,15 @@
         <span class="setuplabel">{{ f.label }}</span>
         <select name="{{ f.name }}">
           {% for opt in f.options %}
-            <option value="{{ opt }}"{{ ' selected' if opt == f.value }}>{{ opt }}{{ ' — default' if opt == f.default }}</option>
+            <option value="{{ opt }}"{{ ' selected' if opt == f.value }}>{{ opt }}{% if f.name == 'length_policy' and spans.get(opt) %} ({{ spans[opt] }}){% endif %}{{ ' — default' if opt == f.default }}</option>
           {% endfor %}
         </select>
       </label>
     {% endfor %}
+
+    <p class="hint"><strong>auto</strong> lets the paper decide: an outline is
+      written first, and the episode is as long as the beats come to. The other
+      settings narrow that range rather than fixing a number.</p>
 
     <p class="hint">These are remembered for the next paper you upload, so the
       wizard gets out of the way once you have answered it. They are also pinned

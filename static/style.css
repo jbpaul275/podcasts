@@ -439,3 +439,12 @@ a.tag:hover { border-color: var(--a); color: var(--a); }
 .setup .hint { font-size: 0.8rem; color: var(--muted); line-height: 1.55; margin: 0.4rem 0 0; }
 .status-draft { background: #f1eee6; color: #6f6a5e; text-decoration: none; }
 @media (prefers-color-scheme: dark) { .status-draft { background: #2b2822; color: #cfc9bb; } }
+
+/* the beat sheet the script was written against */
+.plan { border: 1px solid var(--rule); border-radius: 8px; padding: 0.9rem 1.1rem; margin-top: 1.5rem; }
+.plan summary { cursor: pointer; font-weight: 600; font-size: 0.9rem; }
+.plan p { font-size: 0.85rem; margin: 0.6rem 0; }
+.plan ul { list-style: none; padding: 0; margin: 0.8rem 0 0; display: grid; gap: 0.8rem; }
+.plan li { font-size: 0.88rem; line-height: 1.5; }
+.mustland { display: inline-block; font-size: 0.78rem; color: var(--muted);
+            border-left: 2px solid var(--rule); padding-left: 0.5rem; margin-top: 0.2rem; }

@@ -113,6 +113,34 @@ models = [
   "gemini-flash-latest",
 ]
 
+# How long an episode should be, and who decides.
+#
+# The old fixed target made every paper the same length, which meant padding a
+# methods note and compressing a paper with three experiments. Length is now a
+# consequence of the outline stage: the beat sheet says what there is to say,
+# and the episode is as long as that comes to.
+#
+# 160 words a minute is conversational delivery, and it is the rate the old
+# 1600-word/ten-minute target implied.
+words_per_minute = 160
+
+# Bounds per length policy, in minutes: [floor, ceiling]. The outline is told
+# the range and picks within it; a total outside the range is clamped, and the
+# clamp is recorded on the episode rather than applied quietly.
+#
+# "auto" is the default and the point of the feature. The others exist for when
+# you have read the paper and disagree -- the outline still decides the shape,
+# just inside a narrower band.
+#
+# The ceiling is a real cost: TTS is ~97% of an episode and scales with length,
+# so a 30-minute episode is roughly three times the price and three times the
+# daily request quota of a 10-minute one.
+[script.lengths]
+auto     = [5, 30]
+short    = [5, 10]
+standard = [9, 13]
+long     = [18, 30]
+
 # Tags for browsing the library. Deliberately a fixed vocabulary rather than
 # free text: at this size typos and near-duplicates ("AI" / "ai" / "Machine
 # Learning") cost more than the flexibility is worth.

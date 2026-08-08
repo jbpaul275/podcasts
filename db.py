@@ -118,6 +118,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
                        # Distinct from script_model, which records what
                        # actually ran. This is what to ask for next time.
                        ("script_model_wanted", "TEXT"),
+                       ("outline_json", "TEXT"),
+                       ("target_words", "INTEGER"),
+                       ("length_policy", "TEXT"),
                        ("failed_at", "TEXT"),
                        ("flags_reviewed", "INTEGER DEFAULT 0")):
         if name not in cols:

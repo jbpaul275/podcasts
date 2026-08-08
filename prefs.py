@@ -21,6 +21,7 @@ FIELDS = {
     "tts_model": "tts_model",
     "voice_a": "voice_a",
     "voice_b": "voice_b",
+    "length_policy": "length_policy",
 }
 
 LABELS = {
@@ -29,6 +30,7 @@ LABELS = {
     "tts_model": "Voice model",
     "voice_a": "Host A voice",
     "voice_b": "Host B voice",
+    "length_policy": "Episode length",
 }
 
 
@@ -51,6 +53,8 @@ def defaults(cfg: dict) -> dict[str, str]:
         "tts_model": models.get("tts", ""),
         "voice_a": voices.get("host_a", ""),
         "voice_b": voices.get("host_b", ""),
+        # "auto" is the point of the outline stage: the paper decides.
+        "length_policy": "auto",
     }
 
 
@@ -72,6 +76,7 @@ def choices(cfg: dict) -> dict[str, list[str]]:
         "tts_model": _dedupe([base["tts_model"], *(tcfg.get("models") or [])]),
         "voice_a": _dedupe([base["voice_a"], *voices]),
         "voice_b": _dedupe([base["voice_b"], *voices]),
+        "length_policy": _dedupe(["auto", *(scfg.get("lengths") or {})]),
     }
 
 
