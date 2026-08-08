@@ -38,23 +38,53 @@ def _expected_chunks(chunk_dir, fallback: int) -> int:
     return fallback
 
 
+# atempo is only defined over this range in a single filter instance. A speed
+# outside it is a config mistake rather than an intention.
+TEMPO_MIN, TEMPO_MAX = 0.5, 2.0
+
+
+def _intro_speed(cfg: dict) -> float:
+    speed = float(cfg.get("intro", {}).get("speed", 1.0) or 1.0)
+    if not TEMPO_MIN <= speed <= TEMPO_MAX:
+        log.warning("[intro] speed %.2f is outside %.1f-%.1f; leaving the intro "
+                    "at its recorded pace", speed, TEMPO_MIN, TEMPO_MAX)
+        return 1.0
+    return speed
+
+
 def _intro_part(chunk_dir, rate: int, cfg: dict):
-    """The intro WAV, resampled if it does not match the dialogue chunks.
-    The concat demuxer stream-copies, so a mismatched sample rate would not be
-    an error — it would be an intro that plays at the wrong speed."""
+    """The intro WAV, ready to sit in front of the dialogue.
+
+    Two reasons it may need a pass through ffmpeg. Its sample rate has to match
+    the chunks, because the concat demuxer stream-copies and a mismatch would
+    not error — it would play at the wrong speed. And `[intro] speed` shortens
+    it: a compliance sentence is the same words every episode, so a listener on
+    their fifth one wants it over with, but the hosts must not be touched.
+
+    Done here rather than at synthesis so the recording on disk stays the
+    recording. Changing the pace is then a rebuild, which costs nothing, rather
+    than another TTS call.
+    """
     if not intro_mod.enabled(cfg):
         return None
     intro = chunk_dir / intro_mod.WAV_NAME
     if not intro.exists() or intro.stat().st_size <= 44:
         return None
+
+    speed = _intro_speed(cfg)
     with wave.open(str(intro), "rb") as w:
-        if w.getframerate() == rate and w.getnchannels() == 1:
-            return intro
+        matches = w.getframerate() == rate and w.getnchannels() == 1
+    if matches and speed == 1.0:
+        return intro
+
     fixed = chunk_dir / "_intro_matched.wav"
-    _run([
-        "ffmpeg", "-y", "-i", str(intro),
-        "-ar", str(rate), "-ac", "1", "-sample_fmt", "s16", str(fixed),
-    ])
+    cmd = ["ffmpeg", "-y", "-i", str(intro)]
+    if speed != 1.0:
+        # atempo stretches time without moving pitch, so a faster read still
+        # sounds like the same person rather than a chipmunk.
+        cmd += ["-filter:a", f"atempo={speed:g}"]
+    cmd += ["-ar", str(rate), "-ac", "1", "-sample_fmt", "s16", str(fixed)]
+    _run(cmd)
     return fixed
 
 

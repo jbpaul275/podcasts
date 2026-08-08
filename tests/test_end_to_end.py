@@ -3450,3 +3450,50 @@ def test_an_ingest_rejection_records_when_it_happened(env, tmp_path):
     assert db.list_episodes()[0]["failed_at"], (
         "without a timestamp the library cannot tell a fresh failure from an old one"
     )
+
+
+@pytest.mark.skipif(not HAS_FFMPEG, reason="ffmpeg required")
+def test_the_disclosure_can_be_sped_up_without_touching_the_hosts(env, tmp_path):
+    """It is the same sentence every episode, so a subscriber wants it over
+    with. The conversation is what they came for."""
+    import db
+    from pipeline import ingest, run
+
+    cfg = {**env["cfg"], "intro": {**env["cfg"].get("intro", {}), "speed": 1.25}}
+    pdf = tmp_path / "fast.pdf"
+    _make_pdf(pdf)
+    episode_id = ingest.ingest_pdf(pdf, cfg)
+    run.run_episode(episode_id, cfg)
+
+    chunks = sorted((env["chunks"] / episode_id).glob("[0-9][0-9][0-9].wav"))
+    dialogue = 1.5 * len(chunks) + 0.25 * len(chunks)   # chunks plus every seam
+    duration = db.get_episode(episode_id)["duration_s"]
+
+    # The intro is in there, but shortened: 0.8s recorded plays in 0.64s.
+    assert duration == pytest.approx(dialogue + INTRO_SECONDS / 1.25, abs=0.25)
+    assert duration < dialogue + INTRO_SECONDS, "faster than the recording"
+
+    # The recording itself is untouched, so the pace is a rebuild away.
+    with wave.open(str(env["chunks"] / episode_id / "intro.wav")) as w:
+        recorded = w.getnframes() / w.getframerate()
+    assert recorded == pytest.approx(INTRO_SECONDS, abs=0.05)
+
+
+@pytest.mark.skipif(not HAS_FFMPEG, reason="ffmpeg required")
+def test_an_absurd_intro_speed_is_ignored_rather_than_obeyed(env, tmp_path):
+    """atempo is only defined over 0.5-2.0, and a bad config value should not
+    fail an episode over a compliance sentence."""
+    import db
+    from pipeline import ingest, run
+
+    cfg = {**env["cfg"], "intro": {**env["cfg"].get("intro", {}), "speed": 9.0}}
+    pdf = tmp_path / "silly.pdf"
+    _make_pdf(pdf)
+    episode_id = ingest.ingest_pdf(pdf, cfg)
+    run.run_episode(episode_id, cfg)
+
+    assert db.get_episode(episode_id)["status"] == "done"
+    chunks = sorted((env["chunks"] / episode_id).glob("[0-9][0-9][0-9].wav"))
+    dialogue = 1.5 * len(chunks) + 0.25 * len(chunks)
+    assert db.get_episode(episode_id)["duration_s"] == pytest.approx(
+        dialogue + INTRO_SECONDS, abs=0.25), "left at its recorded pace"

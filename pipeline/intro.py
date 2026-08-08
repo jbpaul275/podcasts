@@ -37,11 +37,11 @@ WAV_NAME = "intro.wav"
 TEXT_NAME = "intro.txt"
 
 DEFAULT_TEMPLATE = (
-    "This is a Paperpod, an AI generated podcast with discussions of important "
+    "This is Paperpod, an AI generated podcast with discussions of important "
     "academic papers. Today's episode is about $TITLE, by $AUTHORS."
 )
 DEFAULT_TEMPLATE_NO_AUTHORS = (
-    "This is a Paperpod, an AI generated podcast with discussions of important "
+    "This is Paperpod, an AI generated podcast with discussions of important "
     "academic papers. Today's episode is about $TITLE."
 )
 DEFAULT_VOICE = "Charon"
