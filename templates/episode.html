@@ -122,6 +122,27 @@
     </details>
   {% endif %}
 
+  {% if admin and ep.outline %}
+    <details class="plan">
+      <summary>Plan — {{ ep.outline.minutes }} minutes, {{ ep.outline.beats|length }} beats</summary>
+      {% if ep.outline.why %}<p class="muted">Why this length: {{ ep.outline.why }}</p>{% endif %}
+      {% if ep.outline.clamped %}
+        <p class="muted">Trimmed to fit the configured range — see the stage log.</p>
+      {% endif %}
+      <p class="muted">The script was written against this. A beat missing from
+        the episode is the thread being lost, which is what the plan exists to
+        prevent.</p>
+      <ul>
+        {% for b in ep.outline.beats %}
+          <li><strong>{{ b.segment }}</strong> <span class="muted">{{ b.words }} words</span><br>
+            {{ b.covers }}
+            {% if b.facts %}<br>{% for f in b.facts %}<span class="mustland">{{ f }}</span>{% endfor %}{% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    </details>
+  {% endif %}
+
   {% if admin and ep.cost_breakdown %}
     <section class="costs">
       <h2>API cost</h2>

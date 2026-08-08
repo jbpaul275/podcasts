@@ -13,7 +13,8 @@ PDF → ingest → script → TTS → assemble → MP3
 | Stage | What it does |
 |---|---|
 | `ingest` | SHA-256 dedupe, size/page/text-layer validation, copy into `data/papers/`, native-PDF metadata extraction |
-| `script` | Sends the PDF natively (so tables and figures survive) and returns speaker-tagged dialogue |
+| `outline` | Reads the paper and plans the episode as beats, which is what decides how long it is |
+| `script` | Sends the PDF natively (so tables and figures survive) and writes the dialogue against that plan |
 | `tts` | Records the spoken AI disclosure in its own voice, then chunks the script on speaker-turn boundaries and synthesizes each chunk with two-speaker TTS |
 | `assemble` | ffmpeg concat with seam silence, disclosure first, two-pass loudness normalization, 96k mono MP3 with ID3 tags |
 
@@ -50,6 +51,22 @@ A stored preference naming something no longer offered is dropped rather than ca
 Papers arriving through `data/inbox/` keep processing on their own, because a file dropped in a folder has nobody standing by to answer questions about it. They use the remembered preferences.
 
 An episode waiting on the wizard has status `draft`. It is not one of the pipeline stages, so the resume-on-startup sweep leaves it alone — starting it would spend money nobody authorised.
+
+### How long an episode is
+
+Nobody picks a duration. An outline stage reads the paper first and returns a beat sheet — for each segment of the arc, what it covers, the specific facts that must land, and what that beat is worth in words. The episode is as long as the beats come to.
+
+That is the point: a fixed target made every paper the same size, which meant padding a methods note out to ten minutes and compressing a paper with three experiments down to it. A thin paper now lands at eight minutes and a rich one at twenty-five, without either being stretched or squeezed.
+
+**The beat sheet is also what keeps a long script coherent.** A 5,000-word episode written in one pass drifts, because the model is holding the arc only in its head. Handing it an explicit map is the standard fix, and it gets more valuable exactly as episodes get longer. Each beat carries its "must land" facts, so the instruction is not "cover the findings" but the specific number to reach.
+
+`[script.lengths]` sets the bounds per policy, in minutes. `auto` is the default and the whole feature; the others narrow the range rather than fixing a number, for when you have read the paper and disagree. The wizard picks the policy at upload; the outline picks the number inside it. A total outside the range is **clamped and recorded** as an `outlining:clamped` stage rather than applied quietly — a length nobody budgeted for is real money and real daily quota.
+
+The plan is stored and shown on the episode page, so a length you did not choose comes with a reason you can read, and a script that wandered can be checked against the map it was given.
+
+Two costs scale with length, both linear: TTS is ~97% of an episode, and it is ~9 requests for ten minutes against a 100/day per-model cap. A 30-minute episode is roughly three times the price and three times the quota of a 10-minute one.
+
+An episode with no beat sheet — built before this stage existed, or retried from `scripting` — falls back to `[script] target_words`.
 
 ### Which PDFs are accepted
 

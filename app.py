@@ -58,6 +58,7 @@ from pipeline import (
     ingest,
     intro as intro_mod,
     run,
+    outline as outline_mod,
     script as script_mod,
     tts as tts_mod,
 )
@@ -385,6 +386,31 @@ def _failed_recently(rows: list[dict]) -> bool:
     return False
 
 
+def _outline_view(row) -> dict | None:
+    """The beat sheet, shaped for the page: why this length, and the plan.
+
+    Shown because a length nobody chose deserves a reason you can read. It is
+    also the map the script was written against, so a script that wandered is
+    checkable against it rather than only judged by ear.
+    """
+    plan = outline_mod.stored(row)
+    if not plan:
+        return None
+    wpm = outline_mod.words_per_minute(CFG)
+    words = outline_mod.planned_words(plan)
+    try:
+        actual = int(row["target_words"] or 0)
+    except (IndexError, KeyError, TypeError):
+        actual = 0
+    return {
+        "why": plan.get("why", ""),
+        "beats": plan["beats"],
+        "words": actual or words,
+        "minutes": round((actual or words) / wpm),
+        "clamped": bool(actual and words and actual != words),
+    }
+
+
 def _intro_view(row) -> dict | None:
     """The spoken AI disclosure: what it will say, and whether the audio on
     disk still says it. Editing a paper's title or authors changes the wording,
@@ -564,6 +590,7 @@ def _episode_view(row) -> dict:
         "script_updated_at": row["script_updated_at"],
         "script_model": row["script_model"] or CFG["models"]["script"],
         "grounding": db.grounding(row),
+        "outline": _outline_view(row),
         "script_md_present": bool(row["script_md"]),
         "summary": _blurb(row),
         "categories": cats,
@@ -1275,6 +1302,9 @@ def _setup_view(request: Request, row, chosen: dict, error: str = "",
     return templates.TemplateResponse(
         request, "setup.html",
         {"admin": True, "signed_in": True, "ep": _episode_view(row),
+         "spans": {name: f"{lo}\u2013{hi} min" for name, (lo, hi)
+                   in ((n, outline_mod.policy_range(CFG, n))
+                       for n in prefs.choices(CFG)["length_policy"])},
          "fields": [{"name": f, "label": prefs.LABELS[f],
                      "value": chosen.get(f, ""),
                      "options": opts,
@@ -1303,7 +1333,7 @@ def episode_setup_save(request: Request, episode_id: str,
                        action: str = Form("start"),
                        metadata_model: str = Form(""), script_model: str = Form(""),
                        tts_model: str = Form(""), voice_a: str = Form(""),
-                       voice_b: str = Form("")):
+                       voice_b: str = Form(""), length_policy: str = Form("")):
     require_admin(request)
     row = db.get_episode(episode_id)
     if not row:
@@ -1316,7 +1346,8 @@ def episode_setup_save(request: Request, episode_id: str,
         return _setup_view(request, row, prefs.defaults(CFG))
 
     picked = {"metadata_model": metadata_model, "script_model": script_model,
-              "tts_model": tts_model, "voice_a": voice_a, "voice_b": voice_b}
+              "tts_model": tts_model, "voice_a": voice_a, "voice_b": voice_b,
+              "length_policy": length_policy}
     try:
         # Remembered for next time as well as applied here: the wizard should
         # get out of the way once it has been answered once.

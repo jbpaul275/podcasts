@@ -184,6 +184,31 @@ def script_choices(cfg: dict) -> list[str]:
     return uniq
 
 
+def _target_words(ep, cfg: dict) -> int:
+    """The length the outline settled on, or the configured default.
+
+    The fallback matters: episodes built before the outline stage existed, and
+    any retry from `scripting` that skips it, still need a number.
+    """
+    try:
+        stored = ep["target_words"] if ep else None
+    except (IndexError, KeyError, TypeError):
+        stored = None
+    return int(stored) if stored else int(cfg["script"]["target_words"])
+
+
+def _brief(ep) -> str:
+    """The beat sheet, or a line saying there is not one."""
+    from . import outline as outline_mod
+
+    plan = outline_mod.stored(ep) if ep is not None else None
+    if not plan:
+        return ("No beat sheet for this episode -- follow the arc in your "
+                "instructions and choose the emphasis yourself.")
+    why = f"Why this length: {plan['why']}\n\n" if plan.get("why") else ""
+    return why + outline_mod.as_brief(plan)
+
+
 def revise_script(episode_id: str, cfg: dict, instructions: str,
                   model: str | None = None) -> str:
     """Rewrite the stored script to an editor's notes, keeping the rest intact.
@@ -198,7 +223,7 @@ def revise_script(episode_id: str, cfg: dict, instructions: str,
     if not instructions.strip():
         raise PipelineError("no revision notes given")
 
-    target = cfg["script"]["target_words"]
+    target = _target_words(ep, cfg)
     user = (
         load_prompt("script_revise.md")
         .replace("$INSTRUCTIONS", instructions.strip())
@@ -211,12 +236,14 @@ def revise_script(episode_id: str, cfg: dict, instructions: str,
 def generate_script(episode_id: str, cfg: dict, instructions: str | None = None,
                     model: str | None = None) -> str:
     """Write a script from the paper, ignoring whatever script exists."""
-    target = cfg["script"]["target_words"]
+    ep = db.get_episode(episode_id)
+    target = _target_words(ep, cfg)
     user = (
         load_prompt("script_user.md")
         .replace("$TARGET_WORDS", str(target))
         .replace("$MIN_WORDS", str(int(target * 0.875)))
         .replace("$MAX_WORDS", str(int(target * 1.125)))
+        .replace("$OUTLINE", _brief(ep))
     )
     if instructions and instructions.strip():
         user += (

@@ -37,6 +37,20 @@ from pipeline import script as _script_module  # noqa: E402
 
 _REAL_GENERATE_SCRIPT = _script_module.generate_script
 
+# What the outline stage would have produced. Beats add up to OUTLINE_WORDS.
+SAMPLE_OUTLINE = {
+    "why": "One clean result and a real weakness.",
+    "beats": [
+        {"segment": "Cold open", "covers": "Does a wage floor cost jobs?",
+         "facts": ["the answer people assume"], "words": 300},
+        {"segment": "Findings", "covers": "The employment effect.",
+         "facts": ["about three percent"], "words": 900},
+        {"segment": "Pressure", "covers": "Where it is weakest.",
+         "facts": ["two states, one industry"], "words": 900},
+    ],
+}
+OUTLINE_WORDS = sum(b["words"] for b in SAMPLE_OUTLINE["beats"])
+
 SAMPLE_SCRIPT = "\n".join([
     "HOST_A: Here's a question worth caring about: does raising the minimum wage cost people jobs?",
     "HOST_B: " + " ".join(["Everyone assumed it did, and the theory is clean."] * 12),
@@ -124,7 +138,8 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(assemble, "CHUNKS_DIR", chunks)
     monkeypatch.setattr(assemble, "FINAL_DIR", final)
 
-    calls = {"metadata": 0, "script": 0, "revise": 0, "tts": 0, "intro": 0}
+    calls = {"metadata": 0, "script": 0, "revise": 0, "tts": 0, "intro": 0,
+             "outline": 0}
 
     def fake_metadata(episode_id, cfg):
         calls["metadata"] += 1
@@ -153,6 +168,12 @@ def env(tmp_path, monkeypatch):
         calls["tts"] += 1
         _write_sine_wav(wav_path, freq=200 + 40 * entry["seq"])
 
+    def fake_outline(episode_id, cfg):
+        calls["outline"] += 1
+        import json as _json
+        db.update_episode(episode_id, target_words=OUTLINE_WORDS,
+                          outline_json=_json.dumps(SAMPLE_OUTLINE))
+
     def fake_intro(episode_id, text, wav, cfg):
         calls["intro"] += 1
         calls["intro_text"] = text
@@ -170,6 +191,7 @@ def env(tmp_path, monkeypatch):
         run_mod, "STAGES",
         [
             ("extracting", fake_metadata),
+            ("outlining", fake_outline),
             ("scripting", run_mod._run_scripting),
             ("synthesizing", tts.synthesize),
             ("assembling", assemble.assemble),
@@ -181,7 +203,9 @@ def env(tmp_path, monkeypatch):
         "voices": {"host_a": "Puck", "host_b": "Kore",
                    "choices": ["Puck", "Kore", "Charon", "Sulafat"]},
         "script": {"target_words": 1600, "max_pages": 120,
-                   "models": ["s", "s2"]},
+                   "models": ["s", "s2"], "words_per_minute": 160,
+                   "lengths": {"auto": [5, 30], "short": [5, 10],
+                               "long": [18, 30]}},
         # retry_pass_delay_s 0: the second pass over failed chunks still runs,
         # it just does not sit out its cooldown first.
         "tts": {"chunk_target_words": 60, "chunk_max_words": 120, "context_turns": 2,
@@ -3542,13 +3566,12 @@ def test_uploading_spends_nothing_until_the_wizard_is_answered(public_client, en
 
     assert db.get_episode(eid)["status"] == "draft"
     assert app_mod.WORK_Q.qsize() == 0
-    assert env["calls"] == {"metadata": 0, "script": 0, "revise": 0, "tts": 0,
-                            "intro": 0}, "no stage has run"
+    assert not any(env["calls"].values()), "no stage has run"
 
     page = public_client.get(f"/episode/{eid}/setup").text
     assert "Before we build this one" in page
     for label in ("Metadata model", "Script model", "Voice model",
-                  "Host A voice", "Host B voice"):
+                  "Host A voice", "Host B voice", "Episode length"):
         assert label in page
 
 
@@ -3619,3 +3642,55 @@ def test_a_draft_is_not_resumed_on_restart(env, tmp_path):
     queued = [app_mod.WORK_Q.get_nowait()["id"] for _ in range(app_mod.WORK_Q.qsize())]
     assert "EMID" in queued
     assert "EDRAFT" not in queued
+
+
+def test_the_episode_page_shows_why_it_is_that_long(client, env, tmp_path):
+    """A length nobody chose deserves a reason you can read."""
+    episode_id = _done_episode(env, tmp_path)
+
+    html = client.get(f"/episode/{episode_id}").text
+    assert "One clean result and a real weakness." in html
+    assert "Does a wage floor cost jobs?" in html
+    assert f"{round(OUTLINE_WORDS / 160)} minutes" in html
+    assert "must land" not in html, "the facts are shown, not the prompt's wording"
+    assert "about three percent" in html
+
+
+def test_the_script_is_written_to_the_planned_length(env, tmp_path, monkeypatch):
+    """The outline sets the target; the script call must actually receive it
+    rather than the config default."""
+    import db
+    from pipeline import ingest, run, script as script_mod
+
+    seen = {}
+
+    def capture(episode_id, cfg, instructions=None, model=None):
+        row = db.get_episode(episode_id)
+        seen["target"] = script_mod._target_words(row, cfg)
+        seen["brief"] = script_mod._brief(row)
+        return SAMPLE_SCRIPT
+
+    monkeypatch.setattr(script_mod, "generate_script", capture)
+    pdf = tmp_path / "planned.pdf"
+    _make_pdf(pdf)
+    episode_id = ingest.ingest_pdf(pdf, env["cfg"])
+    run.run_episode(episode_id, env["cfg"], stop_after="scripting")
+
+    assert seen["target"] == OUTLINE_WORDS
+    assert seen["target"] != env["cfg"]["script"]["target_words"]
+    assert "must land: about three percent" in seen["brief"]
+
+
+def test_the_wizard_offers_a_length_policy(public_client, env, tmp_path):
+    import db
+
+    public_client.post("/admin/login", data={"password": "hunter2"})
+    eid = _upload(public_client, tmp_path, "len.pdf")
+
+    page = public_client.get(f"/episode/{eid}/setup").text
+    assert "Episode length" in page
+    assert 'value="auto" selected' in page, "the paper decides, by default"
+
+    public_client.post(f"/episode/{eid}/setup", follow_redirects=False,
+                       data={"action": "start", "length_policy": "long"})
+    assert db.get_episode(eid)["length_policy"] == "long"
