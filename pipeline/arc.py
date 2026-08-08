@@ -23,6 +23,22 @@ THEORETICAL = "theoretical"
 KINDS = (EMPIRICAL, THEORETICAL)
 DEFAULT = EMPIRICAL
 
+# An episode about several works needs a shape too, and it is not a property of
+# any one of them -- it is how they stand to each other. So a second vocabulary,
+# picked per episode rather than per paper.
+CONFLICT = "conflict"
+CONVERGENT = "convergent"
+EXTENSION = "extension"
+RELATIONS = (CONFLICT, CONVERGENT, EXTENSION)
+AUTO = "auto"
+
+# Where an unreadable or missing relation lands. Conflict rather than something
+# more neutral-sounding, because its third beat is the commensurability check:
+# it is the one arc that can conclude "these do not actually disagree" and still
+# be a good episode. Defaulting to convergent would have the hosts paper over a
+# disagreement they never checked for, which is the worse way to be wrong.
+DEFAULT_RELATION = CONFLICT
+
 # "3. Identification — How the authors got leverage..." The name is what the
 # outline groups beats by; the rest is direction for whoever is writing.
 _LINE = re.compile(r"^\s*\d+\.\s*(.+?)\s*[—-]\s*\S", re.MULTILINE)
@@ -44,8 +60,33 @@ def clean_kind(value) -> str:
     return value if value in KINDS else DEFAULT
 
 
+def clean_relation(value) -> str:
+    """A relation name, or the default. `auto` is not one: it means "the
+    positions stage decides", and by the time an arc is needed it has."""
+    value = str(value or "").strip().casefold()
+    return value if value in RELATIONS else DEFAULT_RELATION
+
+
+def of(row, paper_count: int = 1) -> str:
+    """Which arc this episode takes.
+
+    One work and the shape is a property of the work -- an argument and an
+    experiment need different beats. Several works and the shape is how they
+    stand to each other instead, which is a fact about the episode and comes
+    from its relation.
+    """
+    if paper_count > 1:
+        try:
+            stored = row["relation"] if row is not None else None
+        except (IndexError, KeyError, TypeError):
+            stored = None
+        return clean_relation(stored)
+    return kind_of(row)
+
+
 def text(kind: str) -> str:
-    return load_prompt(f"arc_{clean_kind(kind)}.md").strip()
+    name = kind if kind in RELATIONS else clean_kind(kind)
+    return load_prompt(f"arc_{name}.md").strip()
 
 
 def segments(kind: str) -> list[str]:

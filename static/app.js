@@ -33,11 +33,15 @@
       zone.addEventListener(ev, (e) => { e.preventDefault(); zone.classList.remove("over"); })
     );
     zone.addEventListener("drop", (e) => {
-      const file = e.dataTransfer.files[0];
-      if (!file) return;
-      if (!file.name.toLowerCase().endsWith(".pdf")) { alert("PDFs only."); return; }
+      const dropped = Array.from(e.dataTransfer.files);
+      if (!dropped.length) return;
+      if (dropped.some((f) => !f.name.toLowerCase().endsWith(".pdf"))) {
+        alert("PDFs only.");
+        return;
+      }
       const body = new FormData();
-      body.append("file", file);
+      // Several become one episode that reads them against each other.
+      dropped.forEach((f) => body.append("file", f));
       zone.classList.add("busy");
       fetch("/upload", { method: "POST", body, redirect: "follow" })
         .then((r) => {
@@ -129,6 +133,9 @@
   function busyEditing() {
     if (pickingFile) return true;
     if (document.querySelector("details.editbox[open], details.addpaper[open]")) return true;
+    // Papers ticked for comparison are a half-finished instruction. A refresh
+    // while an episode is processing would silently untick them.
+    if (document.querySelector(".pick:checked")) return true;
     const el = document.activeElement;
     return Boolean(el && /^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(el.tagName));
   }
@@ -142,6 +149,27 @@
     setInterval(() => {
       if (!busyEditing()) window.location.reload();
     }, 6000);
+  }
+
+  // ---- picking papers to compare ----
+  // The bar only appears once a comparison is possible. One ticked box is an
+  // accident or a change of mind, not an instruction, and a live "Compare"
+  // button next to it would be an error waiting to be clicked.
+  const picks = Array.from(document.querySelectorAll(".pick"));
+  const bar = document.getElementById("comparebar");
+  if (picks.length && bar) {
+    const count = document.getElementById("comparecount");
+    const refresh = () => {
+      const n = picks.filter((p) => p.checked).length;
+      bar.hidden = n < 2;
+      count.textContent = n + " papers selected";
+    };
+    picks.forEach((p) => p.addEventListener("change", refresh));
+    document.getElementById("clearpicks").addEventListener("click", () => {
+      picks.forEach((p) => { p.checked = false; });
+      refresh();
+    });
+    refresh();
   }
 
   // ---- delete (episode page, and each row in the failures list) ----

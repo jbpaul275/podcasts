@@ -26,6 +26,7 @@ from . import ModelUnusable, PipelineError
 from .gemini import call_with_retry, client, pdf_part, record_cost, strip_fences
 from . import arc as arc_mod
 from . import dossier as dossier_mod
+from . import positions as positions_mod
 from .script import _script_config, _script_models
 
 log = logging.getLogger("paperpod.outline")
@@ -161,7 +162,7 @@ def build_outline(episode_id: str, cfg: dict) -> None:
     policy = (ep["length_policy"] if ep and ep["length_policy"] else "auto")
     lo, hi = policy_range(cfg, policy)
 
-    kind = arc_mod.kind_of(ep)
+    kind = arc_mod.of(ep, len(paths))
     research = dossier_mod.stored(ep)
     user = (
         load_prompt("outline.md")
@@ -170,6 +171,14 @@ def build_outline(episode_id: str, cfg: dict) -> None:
         .replace("$MAX_MINUTES", str(hi))
         .replace("$WORDS_PER_MINUTE", str(words_per_minute(cfg)))
     )
+    comparison = positions_mod.stored(ep)
+    if comparison:
+        # Without this the outline would be planned from the model's own fresh
+        # reading of several PDFs at once, which is exactly what the positions
+        # stage exists to replace.
+        user += ("\n\nHOW THESE WORKS STAND TO EACH OTHER — established before "
+                 "this outline. Plan the beats around it rather than re-deciding "
+                 "it:\n" + positions_mod.as_brief(comparison))
     if research:
         # The reception is not in the work, so without this the Context beats
         # can only be planned as "say something about the literature".

@@ -11,6 +11,7 @@ opened. An absent key means "whatever the config says today".
 """
 
 import db
+from pipeline import arc as arc_mod
 
 # Wizard field -> the episode column it is written to. Voices and models are
 # stored per episode as well as remembered, so an episode built last week is
@@ -23,7 +24,13 @@ FIELDS = {
     "voice_b": "voice_b",
     "length_policy": "length_policy",
     "research": "research",
+    "relation": "relation",
 }
+
+# Fields that only mean something for an episode built on several works. Shown
+# and saved only then, so the wizard for a single paper is not asking how it
+# stands to works that are not there.
+COMPARISON_ONLY = ("relation",)
 
 LABELS = {
     "metadata_model": "Metadata model",
@@ -33,6 +40,7 @@ LABELS = {
     "voice_b": "Host B voice",
     "length_policy": "Episode length",
     "research": "Research the reception",
+    "relation": "How they relate",
 }
 
 
@@ -61,6 +69,10 @@ def defaults(cfg: dict) -> dict[str, str]:
         # pipeline, and most papers do not need it. Worth it for work whose
         # interest is in how it was received rather than what it says.
         "research": "off",
+        # "auto" means the positions stage decides after reading the works,
+        # which is the honest default: the relation is a fact about them, and
+        # picking it before reading is guessing.
+        "relation": "auto",
     }
 
 
@@ -84,10 +96,16 @@ def choices(cfg: dict) -> dict[str, list[str]]:
         "voice_b": _dedupe([base["voice_b"], *voices]),
         "length_policy": _dedupe(["auto", *(scfg.get("lengths") or {})]),
         "research": ["off", "on"],
+        "relation": ["auto", *arc_mod.RELATIONS],
     }
 
 
-def current(cfg: dict) -> dict[str, str]:
+def visible(comparison: bool) -> list[str]:
+    """Which wizard fields apply to this episode, in FIELDS order."""
+    return [f for f in FIELDS if comparison or f not in COMPARISON_ONLY]
+
+
+def current(cfg: dict, comparison: bool = False) -> dict[str, str]:
     """The defaults, overlaid with anything chosen last time.
 
     A stored value that is no longer offered is dropped rather than kept. Models
@@ -97,6 +115,11 @@ def current(cfg: dict) -> dict[str, str]:
     stored = db.get_settings()
     allowed = choices(cfg)
     out = defaults(cfg)
+    # Whether a work was argued with is most of what makes a comparison worth
+    # making, so research starts on when there are several. Only as a default:
+    # an explicit "off" stored from last time still wins.
+    if comparison:
+        out["research"] = "on"
     for field in FIELDS:
         value = stored.get(field)
         if value and value in allowed[field]:
@@ -123,12 +146,12 @@ def validate(values: dict, cfg: dict) -> dict[str, str]:
     return out
 
 
-def save(values: dict, cfg: dict) -> dict[str, str]:
+def save(values: dict, cfg: dict, comparison: bool = False) -> dict[str, str]:
     """Remember these for next time, and return the full effective set."""
     clean = validate(values, cfg)
     if clean:
         db.set_settings(clean)
-    return current(cfg)
+    return current(cfg, comparison=comparison)
 
 
 def reset() -> None:
@@ -141,10 +164,10 @@ def apply_to_episode(episode_id: str, values: dict[str, str]) -> None:
                                      if values.get(field)})
 
 
-def for_episode(row, cfg: dict) -> dict[str, str]:
+def for_episode(row, cfg: dict, comparison: bool = False) -> dict[str, str]:
     """What this episode was actually built with, falling back to the current
     preference for anything it does not pin."""
-    out = current(cfg)
+    out = current(cfg, comparison=comparison)
     if row is None:
         return out
     for field, col in FIELDS.items():

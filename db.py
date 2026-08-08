@@ -190,6 +190,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
                        ("dossier_json", "TEXT"),
                        ("research", "TEXT"),
                        ("work_kind", "TEXT"),
+                       # How an episode's several papers stand to each other.
+                       # An episode fact, not a paper one: the same paper is in
+                       # a conflict with one work and an extension of another.
+                       ("relation", "TEXT"),
+                       ("positions_json", "TEXT"),
+                       ("angle", "TEXT"),
                        ("failed_at", "TEXT"),
                        ("flags_reviewed", "INTEGER DEFAULT 0")):
         if name not in cols:

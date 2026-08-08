@@ -1,0 +1,6 @@
+1. Cold open — The claim all of these works land on, and why a listener should doubt it on the strength of any one of them alone. Do not open with the titles.
+2. The claim — What they agree about, stated once and precisely. Be strict: the shared conclusion is usually narrower than any single work's framing suggests, and overstating it here wastes the whole episode.
+3. The separate routes — How each one got there, one at a time, in enough detail that a listener can see the routes really are separate. Different data, different method, different population, different decade. This is the substance of the episode.
+4. Why that matters — What independence buys. Each route has its own way of being wrong; agreement is only evidence when those failure modes do not overlap. Say explicitly which weaknesses cancel and which do not.
+5. Pressure — Where the convergence is weaker than it looks: a shared assumption running underneath all of them, a common data source, a field-wide convention, publication incentives pushing in one direction. Be specific to these works.
+6. So what — What the shared claim licenses that no single one of these works would license on its own, flagged as the hosts' extrapolation.

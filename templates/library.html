@@ -62,9 +62,17 @@
 {% if admin and error %}<p class="error flash">{{ error }}</p>{% endif %}
 {% if deleted %}<p class="flash ok" role="status">Episode deleted, along with its PDF and audio.</p>{% endif %}
 
+{# One form around the whole list: the checkboxes are inside it, so "compare"
+   submits whatever is ticked without any of it living in JavaScript. The bar
+   is hidden until two are picked, which app.js does. #}
+<form id="compareform" action="/compare" method="post">
 <ul class="posts">
 {% for ep in episodes %}
   <li class="post" data-episode="{{ ep.id }}" data-status="{{ ep.status }}">
+    {% if admin %}
+      <input class="pick" type="checkbox" name="papers" value="{{ ep.id }}"
+             aria-label="Select {{ ep.title }} to compare">
+    {% endif %}
     <h2 class="posttitle">
       {% if ep.has_audio %}
         <button class="play" type="button"
@@ -92,6 +100,14 @@
   </li>
 {% endfor %}
 </ul>
+{% if admin and episodes|length > 1 %}
+  <div class="comparebar" id="comparebar" hidden>
+    <span class="comparecount" id="comparecount"></span>
+    <button type="submit">Compare these</button>
+    <button type="button" class="secondary" id="clearpicks">Clear</button>
+  </div>
+{% endif %}
+</form>
 
 {% if not episodes %}
   <p class="empty">
@@ -128,10 +144,11 @@
 {% if admin %}
 <aside class="sidebar">
   <form class="dropzone" id="dropzone" action="/upload" method="post" enctype="multipart/form-data">
-    <input type="file" name="file" id="fileinput" accept="application/pdf" hidden>
+    <input type="file" name="file" id="fileinput" accept="application/pdf" multiple hidden>
     <p><strong>Drop a PDF</strong><br>or <button type="button" id="pickfile">choose a file</button></p>
     <p class="hint">You pick models and voices on the next screen, before
-      anything is spent.</p>
+      anything is spent. Several at once become one episode that reads them
+      against each other — or tick papers already in the list below.</p>
   </form>
 
   <section class="queue" id="queue" data-count="{{ queue|length }}">

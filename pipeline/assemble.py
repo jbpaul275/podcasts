@@ -52,14 +52,15 @@ def _intro_speed(cfg: dict) -> float:
     return speed
 
 
-def _intro_part(chunk_dir, rate: int, cfg: dict):
-    """The intro WAV, ready to sit in front of the dialogue.
+def _spoken_part(chunk_dir, piece: str, rate: int, cfg: dict):
+    """One announcer WAV, ready to sit beside the dialogue.
 
     Two reasons it may need a pass through ffmpeg. Its sample rate has to match
     the chunks, because the concat demuxer stream-copies and a mismatch would
     not error — it would play at the wrong speed. And `[intro] speed` shortens
-    it: a compliance sentence is the same words every episode, so a listener on
-    their fifth one wants it over with, but the hosts must not be touched.
+    it: the announcer says near enough the same thing every episode, so a
+    listener on their fifth one wants it over with, but the hosts must not be
+    touched.
 
     Done here rather than at synthesis so the recording on disk stays the
     recording. Changing the pace is then a rebuild, which costs nothing, rather
@@ -67,18 +68,20 @@ def _intro_part(chunk_dir, rate: int, cfg: dict):
     """
     if not intro_mod.enabled(cfg):
         return None
-    intro = chunk_dir / intro_mod.WAV_NAME
-    if not intro.exists() or intro.stat().st_size <= 44:
+    if piece == intro_mod.OPENER and not intro_mod.has_opener(cfg):
+        return None
+    source = chunk_dir / f"{piece}.wav"
+    if not source.exists() or source.stat().st_size <= 44:
         return None
 
     speed = _intro_speed(cfg)
-    with wave.open(str(intro), "rb") as w:
+    with wave.open(str(source), "rb") as w:
         matches = w.getframerate() == rate and w.getnchannels() == 1
     if matches and speed == 1.0:
-        return intro
+        return source
 
-    fixed = chunk_dir / "_intro_matched.wav"
-    cmd = ["ffmpeg", "-y", "-i", str(intro)]
+    fixed = chunk_dir / f"_{piece}_matched.wav"
+    cmd = ["ffmpeg", "-y", "-i", str(source)]
     if speed != 1.0:
         # atempo stretches time without moving pitch, so a faster read still
         # sounds like the same person rather than a chipmunk.
@@ -120,16 +123,22 @@ def assemble(episode_id: str, cfg: dict) -> None:
         "-sample_fmt", "s16", str(silence),
     ])
 
-    # The spoken AI disclosure goes in front of the conversation. Missing is
-    # not fatal here — episodes built before the disclosure existed still
-    # assemble — but it is worth a line in the log, since the fix is to retry
-    # from synthesizing.
+    # A short disclosure in front of the conversation, and the credits after
+    # it. Missing is not fatal here — episodes built before either existed
+    # still assemble — but it is worth a line in the log, since the fix is to
+    # retry from synthesizing.
     parts = list(wavs)
-    intro = _intro_part(chunk_dir, rate, cfg)
-    if intro:
-        parts.insert(0, intro)
+    if opener := _spoken_part(chunk_dir, intro_mod.OPENER, rate, cfg):
+        parts.insert(0, opener)
+    elif intro_mod.enabled(cfg) and intro_mod.has_opener(cfg):
+        log.warning("no opener audio in %s; assembling without it", chunk_dir)
+
+    if credits := _spoken_part(chunk_dir, intro_mod.CREDITS, rate, cfg):
+        parts.append(credits)
     elif intro_mod.enabled(cfg):
-        log.warning("no intro audio in %s; assembling without the spoken "
+        # The one that carries the works, so its absence is the one that costs
+        # an episode its spoken attribution.
+        log.warning("no credits audio in %s; assembling without the closing "
                     "disclosure", chunk_dir)
 
     concat_list = chunk_dir / "_concat.txt"
@@ -193,7 +202,8 @@ def assemble(episode_id: str, cfg: dict) -> None:
                     f"Retry from synthesizing to fill them in."),
         )
 
-    for tmp in (silence, concat_list, joined, chunk_dir / "_intro_matched.wav"):
+    for tmp in (silence, concat_list, joined,
+                *(chunk_dir / f"_{p}_matched.wav" for p in intro_mod.PIECES)):
         tmp.unlink(missing_ok=True)
 
 

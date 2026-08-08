@@ -138,7 +138,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(assemble, "FINAL_DIR", final)
 
     calls = {"metadata": 0, "script": 0, "revise": 0, "tts": 0, "intro": 0,
-             "outline": 0, "research": 0}
+             "outline": 0, "research": 0, "positions": 0}
 
     def fake_metadata(episode_id, cfg):
         calls["metadata"] += 1
@@ -170,6 +170,9 @@ def env(tmp_path, monkeypatch):
     def fake_research(episode_id, cfg):
         calls["research"] += 1
 
+    def fake_positions(episode_id, cfg):
+        calls["positions"] += 1
+
     def fake_outline(episode_id, cfg):
         calls["outline"] += 1
         import json as _json
@@ -179,6 +182,7 @@ def env(tmp_path, monkeypatch):
     def fake_intro(episode_id, text, wav, cfg):
         calls["intro"] += 1
         calls["intro_text"] = text
+        calls.setdefault("said", {})[wav.stem] = text
         _write_sine_wav(wav, seconds=INTRO_SECONDS, freq=160)
 
     monkeypatch.setattr(ingest, "extract_metadata", fake_metadata)
@@ -187,18 +191,19 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(tts, "_synthesize_chunk", fake_chunk)
     monkeypatch.setattr(intro_mod, "_synthesize", fake_intro)
 
-    # run.py bound ingest.extract_metadata into STAGES at import time; rebind.
+    # Substituted by name into the real list rather than replacing it. Spelling
+    # the pipeline out here meant every new stage silently dropped out of every
+    # test that runs one, which is a fixture quietly deciding what ships.
     from pipeline import run as run_mod
+    stubs = {
+        "extracting": fake_metadata,
+        "positioning": fake_positions,
+        "researching": fake_research,
+        "outlining": fake_outline,
+    }
     monkeypatch.setattr(
         run_mod, "STAGES",
-        [
-            ("extracting", fake_metadata),
-            ("researching", fake_research),
-            ("outlining", fake_outline),
-            ("scripting", run_mod._run_scripting),
-            ("synthesizing", tts.synthesize),
-            ("assembling", assemble.assemble),
-        ],
+        [(name, stubs.get(name, fn)) for name, fn in run_mod.STAGES],
     )
 
     cfg = {
@@ -367,9 +372,9 @@ def test_seam_silence_is_inserted_between_chunks(env, tmp_path):
     n_chunks = len(list((env["chunks"] / episode_id).glob("[0-9][0-9][0-9].wav")))
     assert n_chunks > 1
     duration = db.get_episode(episode_id)["duration_s"]
-    # The spoken disclosure is a part like any other: it is in front of the
-    # first chunk, with a seam of its own after it.
-    expected_audio = 1.5 * n_chunks + INTRO_SECONDS
+    # The announcer is two parts like any other: an opener in front of the
+    # first chunk and the credits after the last, each with a seam of its own.
+    expected_audio = 1.5 * n_chunks + 2 * INTRO_SECONDS
     expected_silence = 0.4 * n_chunks
     assert duration == pytest.approx(expected_audio + expected_silence, abs=0.5)
 
@@ -2855,9 +2860,11 @@ def _live_episode(env, tmp_path, name="feed.pdf", duration=612.4):
     # spoken disclosure the pipeline would have recorded.
     chunk_dir = env["chunks"] / eid
     chunk_dir.mkdir(parents=True, exist_ok=True)
-    _write_sine_wav(chunk_dir / "intro.wav", seconds=INTRO_SECONDS)
-    (chunk_dir / "intro.txt").write_text(
-        intro_mod.intro_text(db.get_episode(eid), env["cfg"]), encoding="utf-8")
+    for piece in intro_mod.PIECES:
+        _write_sine_wav(chunk_dir / f"{piece}.wav", seconds=INTRO_SECONDS)
+        (chunk_dir / f"{piece}.txt").write_text(
+            intro_mod.text_for(piece, db.get_episode(eid), env["cfg"]),
+            encoding="utf-8")
     return eid
 
 
@@ -3148,27 +3155,32 @@ def test_the_cover_art_meets_both_directories(env):
 # ------------------------------------------------------- spoken AI disclosure
 
 @pytest.mark.skipif(not HAS_FFMPEG, reason="ffmpeg required")
-def test_every_episode_opens_with_the_ai_disclosure(env, tmp_path):
+def test_every_episode_opens_and_closes_with_the_ai_disclosure(env, tmp_path):
     """Apple wants AI disclosed in the show metadata, in each episode's
-    metadata, and in the audio itself. This is the audio."""
+    metadata, and in the audio itself. This is the audio -- said briefly at the
+    front so nobody can miss it, and in full at the end where the works can
+    actually be read out."""
     import db
     from pipeline import intro as intro_pkg
 
     episode_id = _done_episode(env, tmp_path)
 
-    assert env["calls"]["intro"] == 1
-    said = env["calls"]["intro_text"]
-    assert "AI generated" in said
-    assert "Minimum Wages and Employment" in said
-    assert "David Card and Alan Krueger" in said
-    assert intro_pkg.recorded_text(episode_id) == said
+    assert env["calls"]["intro"] == 2
+    said = env["calls"]["said"]
+    assert "AI generated" in said["intro"]
+    assert "Minimum Wages" not in said["intro"], "the opener names no papers"
 
-    # In front of the conversation, not somewhere in the middle of it: the
-    # assembled audio is longer than the dialogue chunks alone by the intro.
+    assert "generated by AI" in said["credits"]
+    assert "Minimum Wages and Employment" in said["credits"]
+    assert "David Card and Alan Krueger" in said["credits"]
+    assert intro_pkg.recorded_text(episode_id, "credits") == said["credits"]
+
+    # One at each end, not somewhere in the middle: the assembled audio is
+    # longer than the dialogue chunks alone by both of them.
     chunks = sorted((env["chunks"] / episode_id).glob("[0-9][0-9][0-9].wav"))
     dialogue = 1.5 * len(chunks)
     duration = db.get_episode(episode_id)["duration_s"]
-    assert duration > dialogue + INTRO_SECONDS / 2
+    assert duration > dialogue + INTRO_SECONDS
 
 
 @pytest.mark.skipif(not HAS_FFMPEG, reason="ffmpeg required")
@@ -3212,30 +3224,31 @@ def test_editing_the_title_marks_the_recorded_disclosure_stale(client, env, tmp_
     episode_id = _done_episode(env, tmp_path)
     html = client.get(f"/episode/{episode_id}").text
     assert "Spoken disclosure" in html
-    assert "still announces the old wording" not in html
+    assert "still says the old wording" not in html
 
     db.update_principal(episode_id, title="A Corrected Title")
     html = client.get(f"/episode/{episode_id}").text
-    assert "still announces the old wording" in html
+    assert "still says the old wording" in html
     assert "A Corrected Title" in html
 
     # Re-running synthesis re-records it -- and does not re-run the dialogue.
-    before = env["calls"]["tts"]
+    before, said_before = env["calls"]["tts"], env["calls"]["intro"]
     from pipeline import run
     run.run_episode(episode_id, env["cfg"], from_stage="synthesizing")
     assert env["calls"]["tts"] == before, "existing chunks must be reused"
-    assert env["calls"]["intro"] == 2
-    assert "A Corrected Title" in env["calls"]["intro_text"]
-    assert "still announces the old wording" not in client.get(f"/episode/{episode_id}").text
+    assert env["calls"]["intro"] == said_before + 1, (
+        "only the credits name the paper, so only they are re-recorded")
+    assert "A Corrected Title" in env["calls"]["said"]["credits"]
+    assert "still says the old wording" not in client.get(f"/episode/{episode_id}").text
 
 
 @pytest.mark.skipif(not HAS_FFMPEG, reason="ffmpeg required")
 def test_audio_built_before_the_disclosure_existed_says_so(client, env, tmp_path):
     episode_id = _done_episode(env, tmp_path)
-    (env["chunks"] / episode_id / "intro.wav").unlink()
+    (env["chunks"] / episode_id / "credits.wav").unlink()
 
     html = client.get(f"/episode/{episode_id}").text
-    assert "does not contain one" in html
+    assert "does not contain it" in html
 
 
 @pytest.mark.skipif(not HAS_FFMPEG, reason="ffmpeg required")
@@ -3250,7 +3263,7 @@ def test_feed_readiness_checks_the_spoken_disclosure(client, env, tmp_path):
     assert any(c["ok"] and "spoken AI disclosure" in c["text"]
                for c in app_mod.feed_readiness())
 
-    (env["chunks"] / episode_id / "intro.wav").unlink()
+    (env["chunks"] / episode_id / "credits.wav").unlink()
     checks = app_mod.feed_readiness()
     assert any(c["ok"] is False and "spoken AI disclosure" in c["text"] for c in checks)
 
@@ -3264,12 +3277,12 @@ def test_backfilling_the_disclosure_reuses_the_dialogue_already_on_disk(client, 
 
     episode_id = _done_episode(env, tmp_path)
     db.update_episode(episode_id, published=1)
-    (env["chunks"] / episode_id / "intro.wav").unlink()
+    (env["chunks"] / episode_id / "credits.wav").unlink()
 
     html = client.get("/admin/feed").text
     assert "Add the spoken disclosure" in html
 
-    before = env["calls"]["tts"]
+    before, said_before = env["calls"]["tts"], env["calls"]["intro"]
     resp = client.post("/admin/disclosure", follow_redirects=False)
     assert resp.status_code == 303 and "queued=1" in resp.headers["location"]
 
@@ -3279,7 +3292,8 @@ def test_backfilling_the_disclosure_reuses_the_dialogue_already_on_disk(client, 
     from pipeline import run
     run.run_episode(episode_id, env["cfg"], from_stage="synthesizing")
     assert env["calls"]["tts"] == before, "dialogue chunks must not be re-synthesized"
-    assert env["calls"]["intro"] == 2
+    assert env["calls"]["intro"] == said_before + 1, (
+        "only the missing piece is re-recorded, not both")
     assert "Add the spoken disclosure" not in client.get("/admin/feed").text
 
 
@@ -3509,12 +3523,13 @@ def test_the_disclosure_can_be_sped_up_without_touching_the_hosts(env, tmp_path)
     run.run_episode(episode_id, cfg)
 
     chunks = sorted((env["chunks"] / episode_id).glob("[0-9][0-9][0-9].wav"))
-    dialogue = 1.5 * len(chunks) + 0.25 * len(chunks)   # chunks plus every seam
+    dialogue = 1.5 * len(chunks) + 0.25 * (len(chunks) + 1)  # chunks plus every seam
     duration = db.get_episode(episode_id)["duration_s"]
 
-    # The intro is in there, but shortened: 0.8s recorded plays in 0.64s.
-    assert duration == pytest.approx(dialogue + INTRO_SECONDS / 1.25, abs=0.25)
-    assert duration < dialogue + INTRO_SECONDS, "faster than the recording"
+    # Both announcer pieces are in there, shortened: 0.8s recorded plays in
+    # 0.64s.
+    assert duration == pytest.approx(dialogue + 2 * INTRO_SECONDS / 1.25, abs=0.25)
+    assert duration < dialogue + 2 * INTRO_SECONDS, "faster than the recording"
 
     # The recording itself is untouched, so the pace is a rebuild away.
     with wave.open(str(env["chunks"] / episode_id / "intro.wav")) as w:
@@ -3537,9 +3552,9 @@ def test_an_absurd_intro_speed_is_ignored_rather_than_obeyed(env, tmp_path):
 
     assert db.get_episode(episode_id)["status"] == "done"
     chunks = sorted((env["chunks"] / episode_id).glob("[0-9][0-9][0-9].wav"))
-    dialogue = 1.5 * len(chunks) + 0.25 * len(chunks)
+    dialogue = 1.5 * len(chunks) + 0.25 * (len(chunks) + 1)
     assert db.get_episode(episode_id)["duration_s"] == pytest.approx(
-        dialogue + INTRO_SECONDS, abs=0.25), "left at its recorded pace"
+        dialogue + 2 * INTRO_SECONDS, abs=0.25), "left at its recorded pace"
 
 
 # ------------------------------------------------------ the creation wizard
@@ -3747,3 +3762,219 @@ def test_a_paper_already_stored_is_not_stored_twice(env, tmp_path):
     episode_id = ingest.ingest_pdf(pdf, env["cfg"])
     assert db.principal_paper(episode_id)["id"] == paper_id
     assert len(list(env["papers"].glob("*.pdf"))) == 1, "no second copy"
+
+
+# --------------------------------------------------- several papers, one episode
+
+def _two_papers(env, tmp_path, client):
+    """Two solo episodes, then a comparison built from both of them."""
+    from pipeline import ingest
+
+    # Different lengths, so the two are different bytes and cannot dedupe into
+    # one paper -- which would make this test pass for the wrong reason.
+    first, second = tmp_path / "first.pdf", tmp_path / "second.pdf"
+    _make_pdf(first, pages=2)
+    _make_pdf(second, pages=3)
+    a = ingest.ingest_pdf(first, env["cfg"])
+    b = ingest.ingest_pdf(second, env["cfg"])
+    resp = client.post("/compare", data={"papers": [a, b]}, follow_redirects=False)
+    assert resp.status_code == 303
+    return a, b, resp.headers["location"].split("/")[2]
+
+
+def test_comparing_two_episodes_makes_one_draft_over_both_papers(client, env, tmp_path):
+    import db
+
+    a, b, new_id = _two_papers(env, tmp_path, client)
+    papers = db.papers_for(new_id)
+    assert [p["id"] for p in papers] == [db.principal_paper(a)["id"],
+                                         db.principal_paper(b)["id"]]
+    assert [p["position"] for p in papers] == [0, 1]
+    assert all(p["role"] == db.PRINCIPAL for p in papers)
+    assert db.get_episode(new_id)["status"] == app_status_draft()
+    assert db.paper_paths(new_id) == [db.paper_pdf(p["id"]) for p in papers]
+
+
+def app_status_draft():
+    import app as app_mod
+    return app_mod.DRAFT
+
+
+def test_a_comparison_is_not_a_sibling_of_its_own_papers(client, env, tmp_path):
+    """It shares a paper with the solo episode about that paper, and shares one
+    with the other. Neither is a re-voicing of it, so publishing it must not
+    unpublish either."""
+    import db
+
+    a, b, new_id = _two_papers(env, tmp_path, client)
+    assert db.siblings(new_id) == [], "sharing a paper is not being a version of one"
+    assert db.siblings(a) == [] and db.siblings(b) == []
+
+    db.update_episode(a, published=1)
+    db.update_episode(new_id, published=1)
+    assert db.demote_siblings(new_id) == []
+    assert db.get_episode(a)["published"] == 1, (
+        "publishing the comparison must not unpublish the solo episode")
+
+
+def test_comparing_needs_two_different_papers(client, env, tmp_path):
+    from pipeline import ingest
+
+    pdf = tmp_path / "one.pdf"
+    _make_pdf(pdf)
+    only = ingest.ingest_pdf(pdf, env["cfg"])
+    resp = client.post("/compare", data={"papers": [only, only]},
+                       follow_redirects=False)
+    assert resp.status_code == 303
+    assert "at%20least%20two" in resp.headers["location"]
+
+
+def test_the_wizard_asks_how_they_relate_only_when_there_are_several(client, env,
+                                                                    tmp_path):
+    from pipeline import ingest
+
+    pdf = tmp_path / "solo.pdf"
+    _make_pdf(pdf)
+    solo = ingest.ingest_pdf(pdf, env["cfg"])
+    body = client.get(f"/episode/{solo}/setup").text
+    assert "How they relate" not in body, "there is nothing for it to relate to"
+
+    _a, _b, new_id = _two_papers(env, tmp_path, client)
+    body = client.get(f"/episode/{new_id}/setup").text
+    assert "How they relate" in body
+    assert 'value="auto"' in body and 'value="conflict"' in body
+    assert 'name="principals"' in body, "and which works are principals"
+
+
+def test_research_starts_on_for_a_comparison(client, env, tmp_path):
+    """Whether a work was argued with is most of what makes a comparison worth
+    making, so the default flips -- unless it was explicitly turned off."""
+    import prefs
+
+    assert prefs.current(env["cfg"])["research"] == "off"
+    assert prefs.current(env["cfg"], comparison=True)["research"] == "on"
+
+    prefs.save({"research": "off"}, env["cfg"])
+    assert prefs.current(env["cfg"], comparison=True)["research"] == "off", (
+        "an explicit choice still wins")
+
+
+def test_the_wizard_records_roles_and_the_angle(client, env, tmp_path):
+    import db
+
+    a, b, new_id = _two_papers(env, tmp_path, client)
+    first = db.papers_for(new_id)[0]["id"]
+    client.post(f"/episode/{new_id}/setup",
+                data={"action": "start", "relation": "conflict",
+                      "angle": "  focus on   the methods ",
+                      "principals": [first]},
+                follow_redirects=False)
+
+    roles = {p["id"]: p["role"] for p in db.papers_for(new_id)}
+    assert roles[first] == db.PRINCIPAL
+    assert set(roles.values()) == {db.PRINCIPAL, db.REFERENCE}
+    row = db.get_episode(new_id)
+    assert row["relation"] == "conflict"
+    assert row["angle"] == "focus on the methods", "whitespace collapsed"
+
+
+def test_a_comparison_lists_its_works_on_the_page_and_in_the_feed(client, env,
+                                                                  tmp_path):
+    import db
+    from pipeline import run
+
+    _a, _b, new_id = _two_papers(env, tmp_path, client)
+    run.run_episode(new_id, env["cfg"], stop_after="scripting")
+    db.update_principal(new_id, source_url="https://example.org/first.pdf")
+    audio = tmp_path / "made-up.mp3"
+    audio.write_bytes(b"\0" * 32)
+    db.update_episode(new_id, status="done", published=1, flags_reviewed=1,
+                      audio_path=str(audio), duration_s=61.0)
+
+    body = client.get(f"/episode/{new_id}").text
+    assert "Works discussed" in body
+    assert body.count("Minimum Wages and Employment") >= 2, "both works listed"
+
+    feed = client.get("/feed.xml").text
+    assert "Works discussed:" in feed
+    assert "https://example.org/first.pdf" in feed
+
+
+def test_uploading_several_at_once_makes_one_episode_over_all_of_them(client, env,
+                                                                      tmp_path):
+    import db
+
+    first, second = tmp_path / "u1.pdf", tmp_path / "u2.pdf"
+    _make_pdf(first, pages=2)
+    _make_pdf(second, pages=3)
+    resp = client.post(
+        "/upload",
+        files=[("file", ("u1.pdf", first.read_bytes(), "application/pdf")),
+               ("file", ("u2.pdf", second.read_bytes(), "application/pdf"))],
+        follow_redirects=False)
+    assert resp.status_code == 303
+    new_id = resp.headers["location"].split("/")[2]
+    assert len(db.papers_for(new_id)) == 2
+    assert db.get_episode(new_id)["status"] == "draft"
+
+
+def test_one_file_still_goes_straight_to_the_wizard(client, env, tmp_path):
+    pdf = tmp_path / "single.pdf"
+    _make_pdf(pdf)
+    resp = client.post(
+        "/upload", files={"file": ("single.pdf", pdf.read_bytes(), "application/pdf")},
+        follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"].endswith("/setup")
+
+
+def _concat_order(env, tmp_path, monkeypatch, cfg=None):
+    """The running order assembly actually hands ffmpeg.
+
+    Snapshotted from the concat list, because it is the only place the order is
+    stated -- and duration cannot tell the front of an episode from the back.
+    """
+    from pipeline import assemble, ingest, run
+
+    cfg = cfg or env["cfg"]
+    seen = {}
+    real_run = assemble._run
+
+    def spy(cmd):
+        listing = next((Path(a) for a in cmd if str(a).endswith("_concat.txt")), None)
+        if listing and listing.exists():
+            seen["order"] = [ln.split(" ", 1)[1].strip("'")
+                             for ln in listing.read_text().splitlines()
+                             if ln.startswith("file ")]
+        return real_run(cmd)
+
+    monkeypatch.setattr(assemble, "_run", spy)
+    pdf = tmp_path / "ordered.pdf"
+    _make_pdf(pdf)
+    episode_id = ingest.ingest_pdf(pdf, cfg)
+    run.run_episode(episode_id, cfg)
+    return seen["order"]
+
+
+@pytest.mark.skipif(not HAS_FFMPEG, reason="ffmpeg required")
+def test_the_credits_are_at_the_end_and_the_opener_at_the_front(env, tmp_path,
+                                                                monkeypatch):
+    """The whole point of splitting the disclosure in two. An episode that
+    opened by reading out every work would lose the listener before the hosts
+    said anything; credits belong where credits go."""
+    order = [f for f in _concat_order(env, tmp_path, monkeypatch)
+             if not f.startswith("_silence")]
+    assert order[0] == "intro.wav", "the short disclosure comes first"
+    assert order[-1] == "credits.wav", "the works are read out last"
+    assert all(f[0].isdigit() for f in order[1:-1]), "dialogue in between"
+
+
+@pytest.mark.skipif(not HAS_FFMPEG, reason="ffmpeg required")
+def test_turning_the_opener_off_leaves_the_episode_disclosed_only_at_the_end(
+        env, tmp_path, monkeypatch):
+    cfg = {**env["cfg"], "intro": {**env["cfg"].get("intro", {}), "opener": False}}
+    order = [f for f in _concat_order(env, tmp_path, monkeypatch, cfg)
+             if not f.startswith("_silence")]
+    assert "intro.wav" not in order
+    assert order[-1] == "credits.wav"
+    assert order[0][0].isdigit(), "the conversation starts straight away"

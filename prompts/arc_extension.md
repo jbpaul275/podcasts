@@ -1,0 +1,6 @@
+1. Cold open — The question the earlier work opened and the later work went after. Concrete, and framed so the listener sees why the first answer was not the end of it. Do not open with the titles.
+2. Where it started — The earlier work on its own terms: what it established, and what it deliberately left unsettled. Give it enough room to be interesting in its own right; the later work is not the point of it.
+3. The opening — The specific gap, limitation or unanswered question the later work took up. Name it precisely. "They extended it" is not a beat; "the original could only see one city, and the mechanism should predict the opposite in a second one" is.
+4. What was added — The later work's contribution, and how much of the answer it actually moves. Be honest about scale: a careful replication in a new setting is a real contribution and a small one, and saying so is more interesting than inflating it.
+5. Pressure — Whether the extension holds. Does it inherit the original's weaknesses, fix them, or introduce new ones? A later work is not right because it is later.
+6. So what — Where this line of work stands now and what the next opening is, flagged as the hosts' reading rather than anything either work claims.
