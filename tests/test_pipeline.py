@@ -1759,3 +1759,29 @@ def test_a_revision_still_inherits_the_style_rules():
     stated only in the generation path."""
     body = (Path(__file__).resolve().parents[1] / "prompts" / "script_revise.md").read_text()
     assert "Every constraint in your system instructions still applies" in body
+
+
+def test_the_web_artwork_is_web_sized():
+    """The feed's 3000px artwork is a megabyte. Serving that to draw an 88px
+    square on every page load is the kind of thing nobody notices until the
+    site is slow on a phone."""
+    import struct
+
+    static = Path(__file__).resolve().parents[1] / "static"
+    web, feed = static / "cover-web.png", static / "cover.png"
+    assert web.exists(), "rendered by tools/make_cover.py and committed"
+
+    w, h, _, colour = struct.unpack(">IIBB", web.read_bytes()[16:26])
+    assert w == h, "square, like the artwork it comes from"
+    assert w <= 1024, "a header tile, not a print master"
+    assert colour == 2, "RGB, matching the feed artwork"
+    assert web.stat().st_size < feed.stat().st_size / 5
+
+
+def test_the_home_page_does_not_load_the_print_master():
+    body = (Path(__file__).resolve().parents[1] / "templates" / "library.html").read_text()
+    assert "cover-web.png" in body
+    assert "static_url('cover-web.png')" in body, (
+        "cache-busted like the other assets, or a re-render serves stale art"
+    )
+    assert "'cover.png'" not in body and '"cover.png"' not in body

@@ -49,7 +49,15 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0
 .dropzone p { margin: 0.25rem 0; }
 .dropzone button { font: inherit; background: none; border: none; color: var(--a); text-decoration: underline; cursor: pointer; padding: 0; }
 
-.libhead { margin-bottom: 1.25rem; }
+.libhead { margin-bottom: 1.25rem; display: flex; align-items: center; gap: 1.1rem; }
+.libtitle { min-width: 0; }
+/* Rounded like a podcast app tile, and a hair of border so a light-edged
+   cover does not dissolve into the page background. */
+.showart {
+  flex: none; width: 5.5rem; height: 5.5rem; border-radius: 10px;
+  border: 1px solid var(--rule); object-fit: cover;
+}
+@media (max-width: 30rem) { .showart { width: 4rem; height: 4rem; } }
 .feedurl { font-size: 0.8rem; }
 
 /* blog-style episode list */
