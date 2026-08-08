@@ -50,6 +50,15 @@ CREATE TABLE IF NOT EXISTS stage_log (
   detail     TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_stage_log_episode ON stage_log(episode_id);
+
+-- Sticky choices from the creation wizard. A key/value table rather than
+-- columns because these are preferences, not facts about an episode: the set
+-- of them changes when the wizard changes, and an unset key must mean "use the
+-- configured default" rather than NULL-meaning-something.
+CREATE TABLE IF NOT EXISTS setting (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
 """
 
 _local = threading.local()
@@ -103,10 +112,42 @@ def _migrate(conn: sqlite3.Connection) -> None:
                        ("rewrite_json", "TEXT"),
                        ("progress_at", "TEXT"),
                        ("episode_number", "INTEGER"),
+                       ("voice_a", "TEXT"),
+                       ("voice_b", "TEXT"),
+                       ("metadata_model", "TEXT"),
+                       # Distinct from script_model, which records what
+                       # actually ran. This is what to ask for next time.
+                       ("script_model_wanted", "TEXT"),
                        ("failed_at", "TEXT"),
                        ("flags_reviewed", "INTEGER DEFAULT 0")):
         if name not in cols:
             conn.execute(f"ALTER TABLE episode ADD COLUMN {name} {decl}")
+    conn.commit()
+
+
+# ---- settings ----
+
+def get_settings() -> dict[str, str]:
+    return {r["key"]: r["value"] for r in
+            get_conn().execute("SELECT key, value FROM setting")}
+
+
+def set_settings(values: dict[str, str]) -> None:
+    conn = get_conn()
+    conn.executemany(
+        "INSERT INTO setting (key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        list(values.items()),
+    )
+    conn.commit()
+
+
+def clear_settings() -> None:
+    """Back to the configured defaults. Deleting rather than writing the
+    defaults in, so a later change to config.toml is picked up instead of
+    frozen against a copy taken today."""
+    conn = get_conn()
+    conn.execute("DELETE FROM setting")
     conn.commit()
 
 

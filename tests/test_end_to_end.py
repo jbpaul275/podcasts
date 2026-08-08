@@ -178,13 +178,14 @@ def env(tmp_path, monkeypatch):
 
     cfg = {
         "models": {"metadata": "m", "script": "s", "tts": "t"},
-        "voices": {"host_a": "Puck", "host_b": "Kore"},
+        "voices": {"host_a": "Puck", "host_b": "Kore",
+                   "choices": ["Puck", "Kore", "Charon", "Sulafat"]},
         "script": {"target_words": 1600, "max_pages": 120,
                    "models": ["s", "s2"]},
         # retry_pass_delay_s 0: the second pass over failed chunks still runs,
         # it just does not sit out its cooldown first.
         "tts": {"chunk_target_words": 60, "chunk_max_words": 120, "context_turns": 2,
-                "retry_pass_delay_s": 0},
+                "retry_pass_delay_s": 0, "models": ["t", "t2"]},
         "audio": {"seam_silence_ms": 250, "lufs_target": -16.0, "true_peak": -1.5,
                   "lra": 11.0, "bitrate": "96k"},
         "server": {"base_url": "http://paperpod.test:8000", "port": 8000},
@@ -1498,10 +1499,17 @@ def test_upload_succeeds_while_another_episode_is_processing(public_client, env,
         follow_redirects=False,
     )
     assert resp.status_code == 303
-    assert resp.headers["location"].endswith("?queued=1")
+    assert resp.headers["location"].endswith("/setup")
 
-    new_id = resp.headers["location"].split("/")[2].split("?")[0]
+    new_id = resp.headers["location"].split("/")[2]
     assert new_id != busy
+    assert db.get_episode(new_id)["status"] == "draft", "waiting on the wizard"
+    assert app_mod.WORK_Q.qsize() == 0, "nothing is spent until the wizard says so"
+
+    # Answering the wizard is what queues it, busy worker or not.
+    resp = public_client.post(f"/episode/{new_id}/setup", data={"action": "start"},
+                              follow_redirects=False)
+    assert resp.status_code == 303
     assert db.get_episode(new_id)["status"] == "queued"
     assert app_mod.WORK_Q.qsize() >= 1, "it really is on the queue"
 
@@ -1589,37 +1597,51 @@ def test_feed_includes_the_source_paper_link(public_client, env, tmp_path):
 
 # --------------------------------------------------- per-episode TTS model
 
-def test_upload_pins_the_chosen_tts_model(public_client, env, tmp_path, monkeypatch):
+def test_the_wizard_pins_the_chosen_models_and_voices(public_client, env, tmp_path):
+    """Pinned per episode, not just remembered: rebuilding this one months from
+    now must not pick up whatever the preferences have moved on to."""
     import db
 
-    import app as app_mod
-    monkeypatch.setattr(app_mod, "tts_choices",
-                        lambda: ["model-a", "model-b"])
     public_client.post("/admin/login", data={"password": "hunter2"})
-
-    pdf = tmp_path / "paper.pdf"
-    _make_pdf(pdf)
-    resp = public_client.post(
-        "/upload",
-        files={"file": ("paper.pdf", pdf.read_bytes(), "application/pdf")},
-        data={"tts_model": "model-b"}, follow_redirects=False,
-    )
-    eid = resp.headers["location"].split("/")[2].split("?")[0]
-    assert db.get_episode(eid)["tts_model"] == "model-b"
-
-
-def test_upload_rejects_an_unlisted_model(public_client, env, tmp_path, monkeypatch):
-    import app as app_mod
-    monkeypatch.setattr(app_mod, "tts_choices", lambda: ["model-a"])
-    public_client.post("/admin/login", data={"password": "hunter2"})
-
     pdf = tmp_path / "paper.pdf"
     _make_pdf(pdf)
     resp = public_client.post(
         "/upload", files={"file": ("paper.pdf", pdf.read_bytes(), "application/pdf")},
-        data={"tts_model": "gemini-does-not-exist"},
+        follow_redirects=False,
     )
+    eid = resp.headers["location"].split("/")[2]
+
+    public_client.post(f"/episode/{eid}/setup", data={
+        "action": "start", "tts_model": "t2", "voice_a": "Charon",
+        "voice_b": "Sulafat", "script_model": "s2",
+    }, follow_redirects=False)
+
+    row = db.get_episode(eid)
+    assert row["tts_model"] == "t2"
+    assert (row["voice_a"], row["voice_b"]) == ("Charon", "Sulafat")
+    assert row["script_model_wanted"] == "s2"
+    assert row["status"] == "queued"
+
+
+def test_the_wizard_rejects_an_unlisted_choice(public_client, env, tmp_path):
+    """Substituting the default for a value nobody picked would build the
+    episode with settings that appear nowhere -- so it refuses instead."""
+    import db
+
+    public_client.post("/admin/login", data={"password": "hunter2"})
+    pdf = tmp_path / "paper.pdf"
+    _make_pdf(pdf)
+    resp = public_client.post(
+        "/upload", files={"file": ("paper.pdf", pdf.read_bytes(), "application/pdf")},
+        follow_redirects=False,
+    )
+    eid = resp.headers["location"].split("/")[2]
+
+    resp = public_client.post(f"/episode/{eid}/setup",
+                              data={"action": "start", "tts_model": "does-not-exist"})
     assert resp.status_code == 400
+    assert "not one of the choices" in resp.text
+    assert db.get_episode(eid)["status"] == "draft", "still unspent"
 
 
 def test_synthesis_uses_the_episodes_model_not_the_config(env, tmp_path):
@@ -3497,3 +3519,103 @@ def test_an_absurd_intro_speed_is_ignored_rather_than_obeyed(env, tmp_path):
     dialogue = 1.5 * len(chunks) + 0.25 * len(chunks)
     assert db.get_episode(episode_id)["duration_s"] == pytest.approx(
         dialogue + INTRO_SECONDS, abs=0.25), "left at its recorded pace"
+
+
+# ------------------------------------------------------ the creation wizard
+
+def _upload(client, tmp_path, name="w.pdf", text=None):
+    pdf = tmp_path / name
+    _make_pdf(pdf, text=text or f"A paper about {name}. " * 40)
+    resp = client.post("/upload", follow_redirects=False,
+                       files={"file": (name, pdf.read_bytes(), "application/pdf")})
+    return resp.headers["location"].split("/")[2]
+
+
+def test_uploading_spends_nothing_until_the_wizard_is_answered(public_client, env, tmp_path):
+    """The choices that shape an episode are easiest to make with the paper in
+    front of you, and hardest to change once the audio is paid for."""
+    import app as app_mod
+    import db
+
+    public_client.post("/admin/login", data={"password": "hunter2"})
+    eid = _upload(public_client, tmp_path)
+
+    assert db.get_episode(eid)["status"] == "draft"
+    assert app_mod.WORK_Q.qsize() == 0
+    assert env["calls"] == {"metadata": 0, "script": 0, "revise": 0, "tts": 0,
+                            "intro": 0}, "no stage has run"
+
+    page = public_client.get(f"/episode/{eid}/setup").text
+    assert "Before we build this one" in page
+    for label in ("Metadata model", "Script model", "Voice model",
+                  "Host A voice", "Host B voice"):
+        assert label in page
+
+
+def test_a_choice_sticks_for_the_next_paper(public_client, env, tmp_path):
+    import db
+
+    public_client.post("/admin/login", data={"password": "hunter2"})
+    first = _upload(public_client, tmp_path, "one.pdf")
+    public_client.post(f"/episode/{first}/setup", follow_redirects=False,
+                       data={"action": "start", "voice_a": "Charon", "tts_model": "t2"})
+
+    second = _upload(public_client, tmp_path, "two.pdf")
+    page = public_client.get(f"/episode/{second}/setup").text
+    assert '<option value="Charon" selected' in page
+    assert '<option value="t2" selected' in page
+
+    # And it is actually applied, not merely preselected.
+    public_client.post(f"/episode/{second}/setup", follow_redirects=False,
+                       data={"action": "start", "voice_a": "Charon", "tts_model": "t2"})
+    assert db.get_episode(second)["voice_a"] == "Charon"
+
+
+def test_restore_defaults_goes_back_to_the_config(public_client, env, tmp_path):
+    public_client.post("/admin/login", data={"password": "hunter2"})
+    first = _upload(public_client, tmp_path, "one.pdf")
+    public_client.post(f"/episode/{first}/setup", follow_redirects=False,
+                       data={"action": "start", "voice_a": "Charon"})
+
+    second = _upload(public_client, tmp_path, "two.pdf")
+    page = public_client.post(f"/episode/{second}/setup", data={"action": "reset"}).text
+    assert '<option value="Puck" selected' in page, "back to config.toml"
+    assert '<option value="Charon" selected' not in page
+
+    # Resetting does not start the episode -- the point is to look again.
+    import db
+    assert db.get_episode(second)["status"] == "draft"
+
+    third = _upload(public_client, tmp_path, "three.pdf")
+    assert '<option value="Puck" selected' in public_client.get(f"/episode/{third}/setup").text
+
+
+def test_a_paper_from_the_inbox_still_runs_by_itself(env, tmp_path):
+    """A file dropped in a folder has nobody standing by to answer questions
+    about it, so the watcher keeps the old behaviour."""
+    import app as app_mod
+    import db
+
+    pdf = env["tmp"] / "inbox" / "dropped.pdf"
+    pdf.parent.mkdir(parents=True, exist_ok=True)
+    _make_pdf(pdf, text="A paper arriving by folder. " * 40)
+
+    episode_id = app_mod._enqueue_path(pdf)
+    assert db.get_episode(episode_id)["status"] == "queued"
+    assert app_mod.WORK_Q.qsize() == 1
+
+
+def test_a_draft_is_not_resumed_on_restart(env, tmp_path):
+    """_requeue_interrupted picks up anything left mid-run. A draft is not
+    mid-run -- it is waiting on a person, and starting it would spend money
+    nobody authorised."""
+    import app as app_mod
+    import db
+
+    db.create_episode("EDRAFT", "/tmp/d.pdf", "sha-draft", status="draft")
+    db.create_episode("EMID", "/tmp/m.pdf", "sha-mid", status="synthesizing")
+
+    app_mod._requeue_interrupted()
+    queued = [app_mod.WORK_Q.get_nowait()["id"] for _ in range(app_mod.WORK_Q.qsize())]
+    assert "EMID" in queued
+    assert "EDRAFT" not in queued

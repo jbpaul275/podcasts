@@ -421,3 +421,13 @@ a.tag:hover { border-color: var(--a); color: var(--a); }
 .backfill form + ul.plain { margin-top: 1rem; }
 .buildstamp { font-variant-numeric: tabular-nums; opacity: 0.75; }
 .epnum { font-variant-numeric: tabular-nums; }
+
+/* creation wizard */
+.setup { max-width: 34rem; }
+.setuprow { display: grid; gap: 0.3rem; margin: 0 0 1rem; }
+.setuplabel { font-size: 0.8rem; font-weight: 600; }
+.setuprow select { width: 100%; font: inherit; }
+.setupactions { display: flex; gap: 0.6rem; flex-wrap: wrap; margin-top: 1.5rem; }
+.setup .hint { font-size: 0.8rem; color: var(--muted); line-height: 1.55; margin: 0.4rem 0 0; }
+.status-draft { background: #f1eee6; color: #6f6a5e; text-decoration: none; }
+@media (prefers-color-scheme: dark) { .status-draft { background: #2b2822; color: #cfc9bb; } }

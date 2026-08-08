@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Set up — {{ feed_title }}{% endblock %}
+{% block content %}
+
+<article class="setup">
+  <h1>Before we build this one</h1>
+  <p class="muted">
+    {% if ep.paper_title %}<strong>{{ ep.paper_title }}</strong>{% else %}Your paper{% endif %}
+    is stored and checked. Nothing has been spent on it yet.
+  </p>
+
+  {% if error %}<p class="error flash">{{ error }}</p>{% endif %}
+
+  <form action="/episode/{{ ep.id }}/setup" method="post">
+    {% for f in fields %}
+      <label class="setuprow">
+        <span class="setuplabel">{{ f.label }}</span>
+        <select name="{{ f.name }}">
+          {% for opt in f.options %}
+            <option value="{{ opt }}"{{ ' selected' if opt == f.value }}>{{ opt }}{{ ' — default' if opt == f.default }}</option>
+          {% endfor %}
+        </select>
+      </label>
+    {% endfor %}
+
+    <p class="hint">These are remembered for the next paper you upload, so the
+      wizard gets out of the way once you have answered it. They are also pinned
+      to this episode, so re-running it months from now rebuilds it the way it
+      was built today rather than however the settings have moved on.</p>
+
+    <div class="setupactions">
+      <button type="submit" name="action" value="start">Create the episode</button>
+      <button type="submit" name="action" value="reset" class="secondary"
+              {{ 'disabled' if is_default }}>Restore defaults</button>
+    </div>
+    {% if is_default %}
+      <p class="hint">Everything is at its configured default.</p>
+    {% endif %}
+  </form>
+
+  <p class="muted backlink"><a href="/admin">← Back to the library</a></p>
+</article>
+
+{% endblock %}

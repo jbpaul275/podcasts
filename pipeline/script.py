@@ -308,7 +308,12 @@ def generate_title(episode_id: str, script: str, cfg: dict) -> str | None:
     the hosts actually took rather than the paper's academic title."""
     from google.genai import types
 
-    model = cfg["models"]["metadata"]  # a short, cheap call
+    ep = db.get_episode(episode_id)
+    # The same short, cheap model the metadata came from: titling is the same
+    # kind of job, and two different models for one episode would be a puzzle
+    # rather than a choice.
+    model = (ep["metadata_model"] if ep and ep["metadata_model"]
+             else cfg["models"]["metadata"])
     try:
         resp = call_with_retry(
             lambda: client().models.generate_content(

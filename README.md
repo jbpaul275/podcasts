@@ -37,6 +37,20 @@ Open <http://localhost:8000>. Drop a PDF on the page, or copy one into `data/inb
 
 The episode page shows the player, the full script with per-speaker styling, the stage log, and the accumulated API cost. Failed runs can be re-run from any named stage.
 
+### The creation wizard
+
+An upload no longer starts the pipeline. It validates the PDF, stores it, and hands you a short form: which model reads the paper, which writes the script, which speaks it, and the two host voices. Nothing is spent until you press **Create the episode**.
+
+The reason for the extra step is that these choices are easiest to make with the paper in front of you and hardest to change afterwards — once the audio exists, changing a voice means paying for the whole episode again.
+
+Answers are **remembered**, so the wizard gets out of the way once you have answered it once, and **pinned to the episode**, so re-running that episode months later rebuilds it the way it was built at the time rather than however the preferences have moved on. **Restore defaults** forgets the remembered answers rather than writing today's defaults into the database — otherwise a later edit to `config.toml` would be silently ignored, and "default" would mean whatever it happened to be the first time the wizard was opened.
+
+A stored preference naming something no longer offered is dropped rather than carried forward. Models get retired and voices get renamed, and a dead one would fail the episode at its first API call, days after it was chosen. A choice the form does not offer is refused outright rather than quietly replaced with the default, which would build an episode with settings nobody picked.
+
+Papers arriving through `data/inbox/` keep processing on their own, because a file dropped in a folder has nobody standing by to answer questions about it. They use the remembered preferences.
+
+An episode waiting on the wizard has status `draft`. It is not one of the pipeline stages, so the resume-on-startup sweep leaves it alone — starting it would spend money nobody authorised.
+
 ### Which PDFs are accepted
 
 Rejections are checked before anything is spent, and every message says what to do about it.

@@ -14,6 +14,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from pipeline import tts  # noqa: E402
+
 
 @pytest.fixture(autouse=True)
 def _isolated_db(tmp_path, monkeypatch):
@@ -1796,3 +1798,96 @@ def test_the_script_prompt_bans_notation_that_cannot_be_read_aloud():
     for written_only in ("~15%", "et al.", "vs.", "R²"):
         assert written_only in fmt, f"name {written_only!r} rather than gesturing at symbols"
     assert "p-value" in fmt, "printing one is the common case in an empirical paper"
+
+
+# ------------------------------------------------------ wizard preferences
+
+_PREF_CFG = {
+    "models": {"metadata": "flash", "script": "pro", "tts": "tts-1"},
+    "voices": {"host_a": "Puck", "host_b": "Kore",
+               "choices": ["Puck", "Kore", "Charon"]},
+    "script": {"models": ["pro", "flash"], "fallback_model": "flash"},
+    "tts": {"models": ["tts-1", "tts-2"]},
+}
+
+
+def test_preferences_start_at_the_configured_defaults(_isolated_db):
+    import prefs
+
+    assert prefs.current(_PREF_CFG) == prefs.defaults(_PREF_CFG)
+    assert prefs.current(_PREF_CFG)["voice_a"] == "Puck"
+
+
+def test_a_saved_preference_overrides_the_config(_isolated_db):
+    import prefs
+
+    prefs.save({"voice_a": "Charon", "tts_model": "tts-2"}, _PREF_CFG)
+    now = prefs.current(_PREF_CFG)
+    assert now["voice_a"] == "Charon" and now["tts_model"] == "tts-2"
+    assert now["voice_b"] == "Kore", "untouched fields stay on the default"
+
+
+def test_restoring_defaults_forgets_rather_than_freezes(_isolated_db):
+    """Writing the defaults into the database on reset would freeze them: a
+    later edit to config.toml would then be silently ignored."""
+    import prefs
+
+    prefs.save({"voice_a": "Charon"}, _PREF_CFG)
+    prefs.reset()
+    assert prefs.current(_PREF_CFG)["voice_a"] == "Puck"
+
+    moved = {**_PREF_CFG, "voices": {**_PREF_CFG["voices"], "host_a": "Kore"}}
+    assert prefs.current(moved)["voice_a"] == "Kore", "the config still leads"
+
+
+def test_a_preference_for_something_retired_is_dropped(_isolated_db):
+    """Models get retired and voices get renamed. Carrying a dead one forward
+    would fail the episode at its first API call, days after it was chosen."""
+    import prefs
+
+    prefs.save({"tts_model": "tts-2"}, _PREF_CFG)
+    shrunk = {**_PREF_CFG, "tts": {"models": ["tts-1"]}}
+    assert prefs.current(shrunk)["tts_model"] == "tts-1"
+
+
+def test_an_invalid_choice_is_refused_not_substituted(_isolated_db):
+    import prefs
+
+    with pytest.raises(ValueError, match="not one of the choices"):
+        prefs.validate({"voice_a": "Gandalf"}, _PREF_CFG)
+
+
+def test_the_configured_default_is_always_offered(_isolated_db):
+    """A config naming a model missing from the lists must still produce a
+    usable wizard, not one that cannot express the current setting."""
+    import prefs
+
+    odd = {**_PREF_CFG, "models": {**_PREF_CFG["models"], "tts": "tts-9"}}
+    assert "tts-9" in prefs.choices(odd)["tts_model"]
+    assert prefs.choices(odd)["tts_model"][0] == "tts-9", "default first"
+
+
+def test_an_episode_keeps_what_it_was_built_with(_isolated_db):
+    import db
+    import prefs
+
+    db.create_episode("EPIN", "/tmp/p.pdf", "sha-pin")
+    prefs.apply_to_episode("EPIN", {"voice_a": "Charon", "tts_model": "tts-2"})
+    prefs.save({"voice_a": "Kore"}, _PREF_CFG)   # preferences move on
+
+    row = db.get_episode("EPIN")
+    assert prefs.for_episode(row, _PREF_CFG)["voice_a"] == "Charon"
+    assert tts.voices_for("EPIN", _PREF_CFG)[0] == "Charon"
+
+
+def test_the_shipped_voice_list_is_real_ids(_isolated_db):
+    """The API rejects a voice name it does not know, and a typo here would
+    fail every chunk of every episode built with it."""
+    from config import load_config
+
+    cfg = load_config()
+    choices = cfg["voices"]["choices"]
+    assert len(choices) == 30, "Gemini ships 30 prebuilt voices"
+    assert cfg["voices"]["host_a"] in choices
+    assert cfg["voices"]["host_b"] in choices
+    assert len(set(choices)) == len(choices)
