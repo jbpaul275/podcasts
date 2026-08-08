@@ -1742,6 +1742,17 @@ def test_the_script_prompt_asks_for_contractions_concretely():
         "rule with no exception invites the model to contract that too"
     )
 
+    # A style note near the top of a long prompt is read and then buried under
+    # seven segment rules. The forms actually observed slipping are named again
+    # as a check to run against the finished draft.
+    check = body[body.index("BEFORE YOU RETURN"):]
+    for form in ("it is", "that is", "we are", "there is", "does not"):
+        assert form in check, f"{form!r} was seen in a real script; name it"
+    assert "what it's" in check, (
+        "a contraction cannot end a clause -- a blanket rule would produce "
+        "'that is what it's', which is not English"
+    )
+
 
 def test_a_revision_still_inherits_the_style_rules():
     """Revisions go through the same system prompt, so the rule cannot be

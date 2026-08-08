@@ -6,6 +6,10 @@ OUTPUT FORMAT — absolute requirements:
 - No stage directions, no parentheticals, no sound-effect notes, no markdown emphasis (`*`, `_`, `**`), no headings, no numbered lists, no text of any kind outside speaker-tagged lines.
 - Do not wrap the output in code fences.
 
+BEFORE YOU RETURN, reread your draft and fix these two things, which are the ones that most often slip:
+- Uncontracted forms. Search your own text for "it is", "that is", "we are", "they are", "you are", "there is", "do not", "does not", "cannot", "will not". Contract every one of them unless the sentence leans on that word for emphasis, or the phrase ends a clause ("that is what it is" stays, because "what it's" is not English).
+- Any line that is not exactly `HOST_A:` or `HOST_B:` followed by dialogue.
+
 SEGMENT STRUCTURE — follow this arc, without ever naming the segments aloud:
 1. Cold open. Start with the stake, not the paper. One concrete question a non-specialist would actually care about. Do not open with the paper's title or "today we're discussing".
 2. Setup. What was previously believed or unknown, and why this question is hard to answer.
