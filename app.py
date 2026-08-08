@@ -413,23 +413,30 @@ def _outline_view(row) -> dict | None:
     }
 
 
-def _intro_view(row) -> dict | None:
-    """The spoken AI disclosure: what it will say, and whether the audio on
-    disk still says it. Editing a paper's title or authors changes the wording,
-    and there is nothing in the audio itself to reveal that it is out of date.
+def _intro_view(row) -> list[dict] | None:
+    """The spoken AI disclosure, piece by piece: what each will say, and
+    whether the audio on disk still says it. Editing a paper's title or authors
+    changes the credits, and there is nothing in the audio itself to reveal
+    that it is out of date.
     """
-    text = intro_mod.intro_text(row, CFG)
-    if not text:
-        return None
-    recorded = intro_mod.recorded_text(row["id"])
     has_audio = bool(row["audio_path"] and Path(row["audio_path"]).exists())
-    return {
-        "text": text,
-        "recorded": recorded,
-        # Nothing to be stale against until an episode has been built.
-        "stale": has_audio and recorded != text,
-        "missing": has_audio and recorded is None,
-    }
+    out = []
+    for piece, where in ((intro_mod.OPENER, "before the hosts start"),
+                         (intro_mod.CREDITS, "after the conversation ends")):
+        text = intro_mod.text_for(piece, row, CFG)
+        if not text:
+            continue
+        recorded = intro_mod.recorded_text(row["id"], piece)
+        out.append({
+            "piece": piece,
+            "where": where,
+            "text": text,
+            "recorded": recorded,
+            # Nothing to be stale against until an episode has been built.
+            "stale": has_audio and recorded is not None and recorded != text,
+            "missing": has_audio and recorded is None,
+        })
+    return out or None
 
 
 def _progress(row) -> dict | None:
@@ -1784,14 +1791,14 @@ def feed_readiness() -> list[dict]:
     # whose title was edited afterwards, sounds fine and is still wrong.
     if intro_mod.enabled(CFG):
         undisclosed = [r["id"] for r in live
-                       if intro_mod.recorded_text(r["id"]) != intro_mod.intro_text(r, CFG)]
+                       if intro_mod.is_stale(r["id"], r, CFG)]
         if undisclosed:
-            bad(f"{len(undisclosed)} published episode(s) do not open with the "
+            bad(f"{len(undisclosed)} published episode(s) do not carry the "
                 "current spoken AI disclosure. Apple requires it in the audio "
                 "itself, not only the metadata. Retry those from synthesizing — "
                 "the dialogue is already on disk.")
         else:
-            good("Every published episode opens with the spoken AI disclosure")
+            good("Every published episode carries the spoken AI disclosure")
     else:
         out.append({"ok": None, "text":
                     "[intro] is switched off, so the audio carries no AI "
@@ -1810,8 +1817,8 @@ def _disclosure_backfill() -> dict:
     """Episodes whose audio does not carry the current spoken disclosure,
     split by what re-running synthesis would actually cost.
 
-    An episode with all its chunk WAVs re-synthesizes only the intro — one
-    short call, a fraction of a cent. One whose chunks are gone pays for the
+    An episode with all its chunk WAVs re-synthesizes only the announcer
+    pieces — one or two short calls, a fraction of a cent. One whose chunks are gone pays for the
     entire script again, which for a library this size is real money. They
     look identical from the outside, so they are counted separately and only
     the cheap ones are ever queued.
@@ -1822,7 +1829,7 @@ def _disclosure_backfill() -> dict:
     for row in db.list_episodes():
         if row["status"] != "done" or not row["audio_path"]:
             continue
-        if intro_mod.recorded_text(row["id"]) == intro_mod.intro_text(row, CFG):
+        if not intro_mod.is_stale(row["id"], row, CFG):
             continue
         present, expected = tts_mod.chunks_on_disk(row["id"])
         target = ready if (expected and present >= expected) else expensive

@@ -17,8 +17,8 @@ PDF → ingest → script → TTS → assemble → MP3
 | `research` | Optional. Grounded search for how the work was received — critics, extensions, what wore well |
 | `outline` | Reads the paper and plans the episode as beats, which is what decides how long it is |
 | `script` | Sends the PDF natively (so tables and figures survive) and writes the dialogue against that plan |
-| `tts` | Records the spoken AI disclosure in its own voice, then chunks the script on speaker-turn boundaries and synthesizes each chunk with two-speaker TTS |
-| `assemble` | ffmpeg concat with seam silence, disclosure first, two-pass loudness normalization, 96k mono MP3 with ID3 tags |
+| `tts` | Records the spoken AI disclosure — opener and closing credits — in its own voice, then chunks the script on speaker-turn boundaries and synthesizes each chunk with two-speaker TTS |
+| `assemble` | ffmpeg concat with seam silence, disclosure opener first and credits last, two-pass loudness normalization, 96k mono MP3 with ID3 tags |
 
 Every stage writes its output to disk and its status to SQLite before the next one starts, so a crash is resumable from the last completed stage. TTS in particular resumes at the chunk level — killing the process mid-synthesis and restarting will not regenerate the script.
 
@@ -48,7 +48,7 @@ On `auto`, the `positions` stage reads the works and decides. Choosing by hand o
 
 The third beat of the conflict arc is the one that earns the stage. Two papers often only *look* like they disagree — different outcome variable, different population, different decade, the same word meaning two things — and a confident adjudication of a conflict that was never real is worse than no episode. When `positions` finds the works incommensurable it says so, the episode explains the mismatch instead of picking a winner, and `positioning:incommensurable` shows up in the log.
 
-Every work is listed on the episode page and in the feed's show notes. The spoken disclosure names the principals and counts the references.
+Every work is listed on the episode page and in the feed's show notes, and read out by name in the closing credits.
 
 ## Setup
 
@@ -272,16 +272,30 @@ Apple requires machine-generated audio to be disclosed in the show metadata, in 
 | --- | --- |
 | Show metadata | `[feed] description` |
 | Episode metadata | the attribution line, which leads every `<description>` and `<itunes:summary>` |
-| The audio | `[intro]` — a spoken sentence at the top of every episode |
+| The audio | `[intro]` — an opener before the hosts, and closing credits after them |
 
-The spoken one is `pipeline/intro.py`. Three things about it are deliberate:
+The spoken one is `pipeline/intro.py`, and it is **two pieces**, because the two jobs pull in opposite directions.
 
-- **The wording is a template, not model output.** A compliance statement a model paraphrases is one that can drift, and nothing downstream would notice. `$TITLE` and `$AUTHORS` are the only variable parts.
-- **It is a separate single-voice call.** The multi-speaker API takes *exactly two* speaker configs — "Exactly two speaker voice configurations must be provided" — so a third voice cannot come from the same call as the hosts. The intro is synthesized on its own with `[intro] voice`, and assembly puts it in front of the dialogue with the usual seam silence. Pick a voice that is neither host or the handoff does not read as one.
-- **It is `intro.wav`, not a numbered chunk.** The gap detection that spots a truncated episode counts `NNN.wav` against the manifest; a chunk that is not dialogue would confuse it.
-- **`[intro] speed` shortens it, and only it.** The same sentence opens every episode, so a subscriber on their fifth wants it over with — but the hosts read at their own pace and are never touched. Applied with ffmpeg's `atempo` at assembly, which stretches time without moving pitch, so a faster read still sounds like the same person. Being an assembly step rather than a synthesis one, changing the pace is a free rebuild (retry from `assembling`) instead of another TTS call. Ships at 1.25; `atempo` is only defined over 0.5–2.0, and a value outside that is logged and ignored rather than allowed to fail an episode over a compliance sentence.
+A listener needs to know inside the first few seconds that nobody here is a person, and that has to be one short sentence — an episode that opens by reading out five titles and their authors loses them before the conversation starts. But the works an episode drew on deserve to be *said*, not counted, and the natural place to read credits is where credits go.
 
-The rendered sentence is stored beside the WAV as `intro.txt`. Editing a paper's title or authors changes the sentence, and the episode page then says the audio announces the old wording — nothing in the audio itself would reveal that. Retrying from **synthesizing** re-records only the intro; the dialogue chunks on disk are reused.
+So the **opener** (`intro.wav`) discloses and names nothing:
+
+> This is Paperpod, an AI generated podcast.
+
+and the **credits** (`credits.wav`) name every work — principals first, then anything the episode drew on, in the same order the show notes list them — and disclose again:
+
+> That was Paperpod. This episode was generated by AI — the script, the voices, and this announcement. It drew on *Minimum Wages and Employment*, by David Card and Alan Krueger; and *Employment Effects Reconsidered*, by David Neumark.
+
+Set `[intro] opener = false` to leave only the credits. That is the honest version of "put it all at the end", with the cost attached: anyone who stops early never hears it, and the feed and episode metadata become the only disclosure they see.
+
+Four things about both are deliberate:
+
+- **The wording is a template, not model output.** A compliance statement a model paraphrases is one that can drift, and nothing downstream would notice. `$WORKS` is the only variable part.
+- **Each is a separate single-voice call.** The multi-speaker API takes *exactly two* speaker configs — "Exactly two speaker voice configurations must be provided" — so a third voice cannot come from the same call as the hosts. Both are synthesized on their own with `[intro] voice`, and assembly places them at either end with the usual seam silence. Pick a voice that is neither host or the handoff does not read as one.
+- **Neither is a numbered chunk.** The gap detection that spots a truncated episode counts `NNN.wav` against the manifest; a chunk that is not dialogue would confuse it.
+- **`[intro] speed` shortens them, and only them.** The announcer says near enough the same thing every episode, so a subscriber on their fifth wants it over with — but the hosts read at their own pace and are never touched. Applied with ffmpeg's `atempo` at assembly, which stretches time without moving pitch, so a faster read still sounds like the same person. Being an assembly step rather than a synthesis one, changing the pace is a free rebuild (retry from `assembling`) instead of another TTS call. Ships at 1.25; `atempo` is only defined over 0.5–2.0, and a value outside that is logged and ignored rather than allowed to fail an episode over a compliance sentence.
+
+Each rendered text is stored beside its WAV as `intro.txt` / `credits.txt`. Editing a paper's title or authors changes the credits, and the episode page then says the audio still says the old wording — nothing in the audio itself would reveal that. Retrying from **synthesizing** re-records only the piece that changed; the dialogue chunks on disk are reused, and so is the piece that did not.
 
 Episodes built before this existed have no intro and say so on their page. `/admin/feed` has a button that queues all of them at once.
 
@@ -317,7 +331,7 @@ All knobs live in `config.toml`, loaded once at startup.
 
 - `[models]` — model IDs for metadata extraction, scripting, and TTS.
 - `[voices]` — the two prebuilt voice IDs. Two speakers is the documented maximum; do not add a third host.
-- `[intro]` — the spoken AI disclosure that opens every episode. See below.
+- `[intro]` — the spoken AI disclosure: a short opener and closing credits that name every work. See below.
 - `[script]` — the content-quality knobs:
   - `target_words` (1600 ≈ ten minutes).
   - `max_pages` — an editorial limit, not a technical one. The API stops at 1000 pages and 50 MB per PDF; each page costs ~258 input tokens and the PDF is sent on both the metadata and the script call. It ships at **775**, the page count at which a single call reaches the 200k input tokens where Pro's rate doubles — a real price cliff rather than a round number, and the point past which `[costs]` would understate what an episode cost. Override with `PAPERPOD_MAX_PAGES` rather than editing the file, so one awkward paper does not need a code change and a redeploy.
@@ -420,7 +434,7 @@ pipeline/
   arc.py             which shape an episode takes, and where it is defined
   positions.py       several works in, a map of how they stand to each other
   script.py          paper in, dialogue script out, citation flagging
-  intro.py           the spoken AI disclosure, in its own voice
+  intro.py           the spoken AI disclosure: opener and closing credits
   tts.py             script in, audio chunks out
   assemble.py        chunks in, normalized MP3 out
   run.py             orchestrator, stage state machine

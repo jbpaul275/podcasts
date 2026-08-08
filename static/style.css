@@ -468,3 +468,6 @@ a.tag:hover { border-color: var(--a); color: var(--a); }
 .plan li { font-size: 0.88rem; line-height: 1.5; }
 .mustland { display: inline-block; font-size: 0.78rem; color: var(--muted);
             border-left: 2px solid var(--rule); padding-left: 0.5rem; margin-top: 0.2rem; }
+
+.introwhere { font-size: 0.76rem; color: var(--muted); text-transform: lowercase;
+              margin: 0.9rem 0 0.2rem; }

@@ -395,18 +395,23 @@
   {% if admin and intro %}
   <section class="ttsbox" id="intro">
     <h2>Spoken disclosure</h2>
-    <p class="muted">Read by a third voice before the hosts start. Apple requires
-      the AI disclosure in the show metadata, in each episode's metadata, and in
-      the audio itself — this is the third.</p>
-    <blockquote class="introtext">{{ intro.text }}</blockquote>
-    {% if intro.missing %}
-      <p class="blocked">This episode's audio was built before the disclosure existed,
-        so it does not contain one. Retry from <strong>synthesizing</strong> to add it —
-        the dialogue chunks are already on disk, so only the intro is re-synthesized.</p>
-    {% elif intro.stale %}
-      <p class="blocked">The audio still announces the old wording:
-        “{{ intro.recorded }}”. Retry from <strong>synthesizing</strong> to re-record it.</p>
-    {% endif %}
+    <p class="muted">Read by a third voice. Apple requires the AI disclosure in
+      the show metadata, in each episode's metadata, and in the audio itself —
+      this is the third. The works are read out at the end, where a list is
+      something a listener can sit through.</p>
+    {% for piece in intro %}
+      <p class="introwhere">{{ piece.where }}</p>
+      <blockquote class="introtext">{{ piece.text }}</blockquote>
+      {% if piece.missing %}
+        <p class="blocked">This episode's audio was built before this existed, so it
+          does not contain it. Retry from <strong>synthesizing</strong> to add it —
+          the dialogue chunks are already on disk, so only the announcer is
+          re-recorded.</p>
+      {% elif piece.stale %}
+        <p class="blocked">The audio still says the old wording:
+          “{{ piece.recorded }}”. Retry from <strong>synthesizing</strong> to re-record it.</p>
+      {% endif %}
+    {% endfor %}
   </section>
   {% endif %}
 
