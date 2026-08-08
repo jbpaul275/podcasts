@@ -89,11 +89,12 @@ Nearly every failure here is a rate limit, and rate limits are a fact about the 
 
 A per-day violation stops the stage immediately instead of backing off through it, because the reset is on Google's clock and half an hour of retries arrives at the same 429. Three facts the error message now carries, because each one changes what you should do:
 
-- **RPD quotas reset at midnight Pacific.** There is no shorter wait to find.
-- **Failed requests still count against the day's allowance.** Retrying into an exhausted quota spends more of it, which is why grinding through is worse than stopping.
-- **Limits are per Cloud project, not per API key.** So a `-FreeTier` quota id means the project *this key belongs to* is unbilled — having budget on a different project does not raise it, and minting a new key in the same project changes nothing. That is a different problem from going too fast, and it needs saying out loud because the 429 text is identical either way.
+- **The server names the window, so use it rather than guessing.** A spent daily quota comes back with a `RetryInfo` measured in hours (`retryDelay: 6776s`, "retry in about 1h52m"). That is capacity ageing out of a rolling window, *not* a calendar day resetting at midnight — an earlier version of this said midnight Pacific and was wrong.
+- **Failed requests still count against the allowance.** Retrying into an exhausted quota spends more of it, which is why grinding through is worse than stopping.
+- **The allowance is per model.** `GenerateRequestsPerDayPerProjectPerModel` — so choosing a different voice model in the wizard draws on a bucket that is still full.
+- **Limits are per Cloud project, not per API key.** A `-FreeTier` quota id means the project *this key belongs to* is unbilled; budget on a different project does not raise it, and a new key in the same project changes nothing. Without that marker it is the ordinary paid-tier cap, which is a completely different problem with identical 429 prose.
 
-Budget remaining and rate limit are separate systems: a paid project still caps preview models well below the headline numbers, so money in the account is not evidence that a quota is wrong.
+Budget remaining and rate limit are separate systems: a paid project still caps preview models well below the headline numbers, so money in the account is not evidence that a quota is wrong. The observed cap for `gemini-3.1-flash-tts` is **100 requests per day**, and an episode costs about nine of them — eight dialogue chunks plus the disclosure — so roughly eleven episodes a day per model, fewer once retries are counted. Raising `[tts] chunk_target_words` buys episodes directly: 250 gives ~8 chunks, 400 gives ~5.
 
 Reasons stored on an episode are distilled rather than dumped — `gemini.describe()` keeps the quota name, limit and window and drops the boilerplate, because the boilerplate is what pushes the useful part past any sensible truncation.
 

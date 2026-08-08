@@ -193,6 +193,21 @@ def quota_summary(v: dict) -> str:
     return ", ".join(bits)
 
 
+def human_delay(seconds: float | None) -> str:
+    """"1h53m" from 6776. The raw number is in the payload and reads as noise."""
+    if not seconds or seconds <= 0:
+        return ""
+    total = int(seconds)
+    if total < 60:
+        return f"{total}s"
+    hours, minutes = total // 3600, (total % 3600) // 60
+    if hours and minutes:
+        return f"{hours}h{minutes:02d}m"
+    if hours:
+        return f"{hours}h"
+    return f"{max(1, minutes)}m"
+
+
 def describe(exc) -> str:
     """A short reason fit to store on an episode.
 
@@ -304,25 +319,29 @@ def call_with_retry(fn, cfg: dict, model: str, label: str = "request",
                 ) from e
             violation = quota_violation(e)
             if quota_is_daily(violation):
-                # A daily allowance resets on Google's clock, not on ours.
-                # Backing off through it burns half an hour per episode to
-                # arrive at the same 429, and the retry window the server
-                # names is about the minute, not the day.
+                # A day's allowance does not come back on our schedule, and the
+                # window is a rolling one rather than a calendar day: the server
+                # answers a spent daily quota with a RetryInfo measured in hours
+                # ("retry in 1h52m"), which is capacity ageing out, not midnight.
+                # Backing off through that would burn half an hour per episode
+                # to arrive at the same 429.
+                wait = human_delay(retry_delay(e))
                 raise QuotaUnavailable(
                     f"{model}: the daily quota is used up ({quota_summary(violation)}). "
-                    "Requests-per-day quotas reset at midnight Pacific, so retrying "
-                    "before then cannot help. Note that failed requests count "
-                    "against the day's allowance too — retrying into an exhausted "
-                    "quota spends more of it. "
+                    + (f"The server says to retry in about {wait}. " if wait else
+                       "Retrying before it resets cannot help. ")
+                    + "Failed requests count against the allowance too, so retrying "
+                    "into an exhausted quota spends more of it. "
                     + ("That quota is a free-tier one. Limits are per Cloud project, "
                        "not per API key, so this means the project this key belongs "
                        "to has no billing attached — having budget on a different "
                        "project does not raise it, and minting a new key in the "
                        "same project changes nothing. "
                        if quota_is_free_tier(violation) else
-                       "A paid project still caps preview models well below the "
-                       "headline numbers, and budget remaining is a separate thing "
-                       "from rate limit. ")
+                       "This is the ordinary paid-tier cap: budget remaining and "
+                       "rate limit are separate things. The allowance is per model, "
+                       "so choosing a different voice model in the wizard draws on "
+                       "a bucket that is still full. ")
                     + "Chunks already synthesized are kept, so a retry once it "
                       "resets only pays for what is missing."
                 ) from e
