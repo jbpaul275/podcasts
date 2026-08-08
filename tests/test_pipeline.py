@@ -1759,3 +1759,40 @@ def test_a_revision_still_inherits_the_style_rules():
     stated only in the generation path."""
     body = (Path(__file__).resolve().parents[1] / "prompts" / "script_revise.md").read_text()
     assert "Every constraint in your system instructions still applies" in body
+
+
+def test_the_script_prompt_asks_for_a_conversation_not_a_relay():
+    """Scripts came back in near-even turns, strictly alternating, with the
+    second host agreeing every time. The prompt described segments and register
+    and said nothing about the shape of the exchange, so the model chose the
+    flattest one available."""
+    body = (Path(__file__).resolve().parents[1] / "prompts" / "script_system.md").read_text()
+    rhythm = body[body.index("RHYTHM"):body.index("HARD CONSTRAINTS")]
+
+    assert "60 to 100 words" in rhythm, (
+        "teaching happens in a long turn and cannot happen in a run of "
+        "twenty-word exchanges"
+    )
+    assert "Two turns in a row" in rhythm, "strict alternation is the tell"
+    assert "disagree with each other" in rhythm, (
+        "hosts who only ever agree are one host in two voices"
+    )
+    for filler in ("Exactly", "Right", "Absolutely"):
+        assert filler in rhythm, f"{filler!r} opened turns in a real script"
+
+
+def test_short_sentences_are_not_confused_with_short_turns():
+    """The two rules pull opposite ways if the distinction is left implicit."""
+    body = (Path(__file__).resolve().parents[1] / "prompts" / "script_system.md").read_text()
+    assert "not the same as short turns" in body
+
+
+def test_the_script_prompt_bans_notation_that_cannot_be_read_aloud():
+    """Everything here goes to a speech model. "~15%" and "R²" are written
+    forms, and a TTS model reading them aloud is at best odd."""
+    body = (Path(__file__).resolve().parents[1] / "prompts" / "script_system.md").read_text()
+    fmt = body[body.index("OUTPUT FORMAT"):body.index("BEFORE YOU RETURN")]
+    assert "read aloud by a speech model" in fmt
+    for written_only in ("~15%", "et al.", "vs.", "R²"):
+        assert written_only in fmt, f"name {written_only!r} rather than gesturing at symbols"
+    assert "p-value" in fmt, "printing one is the common case in an empirical paper"
