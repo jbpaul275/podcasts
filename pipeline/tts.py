@@ -221,6 +221,20 @@ def _build_prompt(entry: dict, cfg: dict) -> str:
     return "\n\n".join(lines)
 
 
+def voices_for(episode_id: str, cfg: dict) -> tuple[str, str]:
+    """The two host voices for this episode, pinned when it was created.
+
+    Pinned for the same reason the TTS model is: the wizard's choices move on,
+    and an episode re-synthesized months later must not come back in somebody
+    else's voices halfway through.
+    """
+    ep = db.get_episode(episode_id)
+    voices = cfg.get("voices", {})
+    a = (ep["voice_a"] if ep and ep["voice_a"] else None) or voices.get("host_a")
+    b = (ep["voice_b"] if ep and ep["voice_b"] else None) or voices.get("host_b")
+    return a, b
+
+
 def model_for(episode_id: str, cfg: dict) -> str:
     """The episode's own TTS model if it has one, else the configured default.
     Pinned per episode so a config change mid-library cannot produce audio that
@@ -233,6 +247,7 @@ def _synthesize_chunk(episode_id: str, entry: dict, wav_path, cfg: dict) -> None
     from google.genai import types
 
     model = model_for(episode_id, cfg)
+    voice_a, voice_b = voices_for(episode_id, cfg)
     speech_config = types.SpeechConfig(
         multi_speaker_voice_config=types.MultiSpeakerVoiceConfig(
             speaker_voice_configs=[
@@ -240,7 +255,7 @@ def _synthesize_chunk(episode_id: str, entry: dict, wav_path, cfg: dict) -> None
                     speaker="HOST_A",
                     voice_config=types.VoiceConfig(
                         prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                            voice_name=cfg["voices"]["host_a"]
+                            voice_name=voice_a
                         )
                     ),
                 ),
@@ -248,7 +263,7 @@ def _synthesize_chunk(episode_id: str, entry: dict, wav_path, cfg: dict) -> None
                     speaker="HOST_B",
                     voice_config=types.VoiceConfig(
                         prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                            voice_name=cfg["voices"]["host_b"]
+                            voice_name=voice_b
                         )
                     ),
                 ),

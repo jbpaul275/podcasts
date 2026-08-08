@@ -61,6 +61,7 @@ from pipeline import (
     script as script_mod,
     tts as tts_mod,
 )
+import prefs
 from prose import author_credit as _author_credit, decaps as _decaps
 
 logging.basicConfig(
@@ -139,6 +140,11 @@ async def http_error(request: Request, exc: StarletteHTTPException):
         )
     return JSONResponse({"detail": exc.detail}, status_code=exc.status_code,
                         headers=getattr(exc, "headers", None))
+
+# Validated and stored, but not yet queued: it is waiting for the creation
+# wizard. Deliberately not one of run.STAGE_NAMES, so the resume-on-startup
+# sweep, the queue sidebar and the page auto-refresh all leave it alone.
+DRAFT = "draft"
 
 # Bump when the terms text changes materially.
 TERMS_UPDATED = "7 August 2026"
@@ -694,6 +700,8 @@ DONE_MESSAGES = {
                   "script appears below when it lands.", "scriptmodel"),
     "retrying": ("Re-running. This page refreshes itself while it works.", None),
     "cited": ("Citation count updated.", "citations"),
+    "queued": ("Queued. This page refreshes itself while the episode builds.", None),
+    "saved": ("Settings saved.", None),
     "nocite": ("No citation count found. OpenAlex has no record matching this "
                "paper's DOI or title — type the number in by hand below.",
                "citations"),
@@ -1234,17 +1242,23 @@ def _render_library(request: Request, admin_mode: bool, error: str = "",
 
 
 @app.post("/upload")
-async def upload(request: Request, file: UploadFile, tts_model: str = Form("")):
+async def upload(request: Request, file: UploadFile):
+    """Validate and store the PDF, then hand over to the wizard.
+
+    Nothing is spent here. An upload used to start the whole pipeline on the
+    configured defaults, which is the wrong moment to commit: the choices that
+    shape an episode are easiest to make with the paper in front of you, and
+    hardest to change once the audio has been paid for.
+    """
     require_admin(request)
     if not (file.filename or "").lower().endswith(".pdf"):
         raise HTTPException(400, "only .pdf files are accepted")
-    if tts_model and tts_model not in tts_choices():
-        raise HTTPException(400, f"unknown TTS model {tts_model!r}")
     staged = INBOX_DIR / f"upload-{db.new_ulid()}.pdf"
     with open(staged, "wb") as out:
         shutil.copyfileobj(file.file, out)
     try:
-        episode_id = _enqueue_path(staged, move_to_processed=True)
+        episode_id = ingest.ingest_pdf(staged, CFG, status=DRAFT)
+        _move_to_processed(staged)
     except DuplicateEpisode as e:
         # Not a failure: this paper is already in the library. Show the episode
         # it landed as, rather than bouncing to a page that looks unchanged.
@@ -1253,9 +1267,70 @@ async def upload(request: Request, file: UploadFile, tts_model: str = Form("")):
     except PipelineError as e:
         _move_to_processed(staged)
         return RedirectResponse(f"/admin?error={quote(str(e))}", status_code=303)
-    if tts_model:
-        db.update_episode(episode_id, tts_model=tts_model)
-    return RedirectResponse(f"/episode/{episode_id}?queued=1", status_code=303)
+    return RedirectResponse(f"/episode/{episode_id}/setup", status_code=303)
+
+
+def _setup_view(request: Request, row, chosen: dict, error: str = "",
+                status_code: int = 200):
+    return templates.TemplateResponse(
+        request, "setup.html",
+        {"admin": True, "signed_in": True, "ep": _episode_view(row),
+         "fields": [{"name": f, "label": prefs.LABELS[f],
+                     "value": chosen.get(f, ""),
+                     "options": opts,
+                     "default": prefs.defaults(CFG).get(f, "")}
+                    for f, opts in prefs.choices(CFG).items()],
+         "is_default": chosen == prefs.defaults(CFG),
+         "error": error,
+         "feed_title": CFG.get("feed", {}).get("title", "Paperpod")},
+        status_code=status_code,
+    )
+
+
+@app.get("/episode/{episode_id}/setup", response_class=HTMLResponse)
+def episode_setup(request: Request, episode_id: str):
+    """The creation wizard: what this episode gets built with, before anything
+    is spent on it."""
+    require_admin(request)
+    row = db.get_episode(episode_id)
+    if not row:
+        raise HTTPException(404, "no such episode")
+    return _setup_view(request, row, prefs.for_episode(row, CFG))
+
+
+@app.post("/episode/{episode_id}/setup", response_class=HTMLResponse)
+def episode_setup_save(request: Request, episode_id: str,
+                       action: str = Form("start"),
+                       metadata_model: str = Form(""), script_model: str = Form(""),
+                       tts_model: str = Form(""), voice_a: str = Form(""),
+                       voice_b: str = Form("")):
+    require_admin(request)
+    row = db.get_episode(episode_id)
+    if not row:
+        raise HTTPException(404, "no such episode")
+
+    if action == "reset":
+        # Back to what config.toml says, and re-render rather than starting --
+        # the point of the button is to look at the defaults again.
+        prefs.reset()
+        return _setup_view(request, row, prefs.defaults(CFG))
+
+    picked = {"metadata_model": metadata_model, "script_model": script_model,
+              "tts_model": tts_model, "voice_a": voice_a, "voice_b": voice_b}
+    try:
+        # Remembered for next time as well as applied here: the wizard should
+        # get out of the way once it has been answered once.
+        effective = prefs.save(picked, CFG)
+    except ValueError as e:
+        return _setup_view(request, row, picked, error=str(e), status_code=400)
+
+    prefs.apply_to_episode(episode_id, effective)
+    if row["status"] == DRAFT:
+        db.update_episode(episode_id, status="queued")
+        enqueue(episode_id)
+        return _done(episode_id, "queued")
+    # Already built or building: saving is all that was asked for.
+    return _done(episode_id, "saved")
 
 
 @app.get("/episode/{episode_id}", response_class=HTMLResponse)

@@ -24,18 +24,23 @@ from .gemini import call_with_retry, client, pdf_part, record_cost, strip_fences
 log = logging.getLogger("paperpod.ingest")
 
 
-def ingest_pdf(path: str | Path, cfg: dict) -> str:
+def ingest_pdf(path: str | Path, cfg: dict, status: str = "queued") -> str:
     """Validate and register a PDF, returning the new episode id.
 
     Raises DuplicateEpisode (carrying the existing id) when this content has
     already been ingested. Validation failures create a `failed` episode row so
-    they stay visible in the library, and raise PipelineError."""
+    they stay visible in the library, and raise PipelineError.
+
+    `status` is what an accepted paper starts as. The web upload uses "draft",
+    which means validated and stored but not yet queued -- it is waiting on the
+    creation wizard. The inbox watcher uses the default, because a file dropped
+    in a folder has nobody standing by to answer questions about it."""
     path = Path(path)
     sha = hashlib.sha256(path.read_bytes()).hexdigest()
 
     existing = db.find_by_sha(sha)
     if existing:
-        reaccepted = _recheck_rejected(existing, cfg)
+        reaccepted = _recheck_rejected(existing, cfg, status)
         if reaccepted:
             return reaccepted
         log.info("skipping %s: duplicate of episode %s", path.name, existing["id"])
@@ -55,7 +60,7 @@ def ingest_pdf(path: str | Path, cfg: dict) -> str:
         episode_id,
         source_path=str(path),
         sha256=sha,
-        status="failed" if error else "queued",
+        status="failed" if error else status,
         error=error,
         failed_at=db.now_iso() if error else None,
     )
@@ -64,7 +69,7 @@ def ingest_pdf(path: str | Path, cfg: dict) -> str:
     return episode_id
 
 
-def _recheck_rejected(existing, cfg: dict) -> str | None:
+def _recheck_rejected(existing, cfg: dict, status: str) -> str | None:
     """Re-validate a PDF that was turned away at ingest, and accept it if the
     rules have since changed. Returns its episode id, or None to leave it be.
 
@@ -106,7 +111,7 @@ def _recheck_rejected(existing, cfg: dict) -> str | None:
     # and created_at is what the library sorts on and what the feed sends as
     # pubDate. A paper you just added would appear wherever it sat days ago
     # instead of at the top, which reads exactly like it never arrived.
-    db.update_episode(existing["id"], status="queued", error=None,
+    db.update_episode(existing["id"], status=status, error=None,
                       created_at=db.now_iso())
     return existing["id"]
 
@@ -189,7 +194,9 @@ def extract_metadata(episode_id: str, cfg: dict) -> None:
 
     from google.genai import types
 
-    model = cfg["models"]["metadata"]
+    ep = db.get_episode(episode_id)
+    model = (ep["metadata_model"] if ep and ep["metadata_model"]
+             else cfg["models"]["metadata"])
     resp = call_with_retry(
         lambda: client().models.generate_content(
             model=model,

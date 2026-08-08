@@ -14,6 +14,25 @@ tts      = "gemini-3.1-flash-tts-preview"
 [voices]
 host_a = "Puck"
 host_b = "Kore"
+# Offered in the creation wizard's voice dropdowns. These are Gemini's prebuilt
+# voice IDs; the API rejects anything not on this list, so do not invent names.
+#
+# Google documents a one-word character for each. Only these five are recorded
+# here because they are the ones actually verified against the docs -- the rest
+# are real voice IDs whose descriptions have not been checked, and a wrong
+# label would be worse than none:
+#   Puck (upbeat) · Kore (firm) · Charon (informative)
+#   Sulafat (warm) · Sadaltager (knowledgeable)
+#
+# Pairing matters more than either voice alone: episodes are 96k mono, so two
+# voices close in pitch are hard to tell apart on phone speakers.
+choices = [
+  "Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Leda",
+  "Orus", "Aoede", "Callirrhoe", "Autonoe", "Enceladus", "Iapetus",
+  "Umbriel", "Algieba", "Despina", "Erinome", "Algenib", "Rasalgethi",
+  "Laomedeia", "Achernar", "Alnilam", "Schedar", "Gacrux", "Pulcherrima",
+  "Achird", "Zubenelgenubi", "Vindemiatrix", "Sadachbia", "Sadaltager", "Sulafat",
+]
 
 # The spoken AI disclosure at the top of every episode. Apple requires the
 # disclosure in the show metadata, in each episode's metadata, and in the

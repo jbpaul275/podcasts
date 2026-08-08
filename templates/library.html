@@ -82,7 +82,8 @@
       {% if ep.number %}<span class="epnum">#{{ ep.number }}</span>{% endif %}
       {% if ep.year %}<span>{{ ep.year }}</span>{% endif %}
       {% if ep.has_audio %}<span>{{ ep.duration }}</span>{% endif %}
-      {% if ep.status != 'done' %}<span class="status status-{{ ep.status }}">{{ ep.status_label or ep.status }}</span>{% endif %}
+      {% if ep.status == 'draft' %}<a class="status status-draft" href="/episode/{{ ep.id }}/setup">finish setup</a>
+      {% elif ep.status != 'done' %}<span class="status status-{{ ep.status }}">{{ ep.status_label or ep.status }}</span>{% endif %}
       {% if admin %}<span class="status status-{{ 'done' if ep.published else 'queued' }}">{{ 'public' if ep.published else 'private' }}</span>{% endif %}
       {% if admin and ep.flag_count %}<a class="flagcount" href="/episode/{{ ep.id }}#flags">{{ ep.flag_count }} flag{{ '' if ep.flag_count == 1 else 's' }}</a>{% endif %}
       {% if ep.cited_by is not none %}<span class="cites" title="Citations, via {{ ep.cited_by_source }}">{{ '{:,}'.format(ep.cited_by) }} citations</span>{% endif %}
@@ -129,13 +130,8 @@
   <form class="dropzone" id="dropzone" action="/upload" method="post" enctype="multipart/form-data">
     <input type="file" name="file" id="fileinput" accept="application/pdf" hidden>
     <p><strong>Drop a PDF</strong><br>or <button type="button" id="pickfile">choose a file</button></p>
-    {% if tts_choices|length > 1 %}
-      <label class="ttspick">Voice model
-        <select name="tts_model" id="ttspick">
-          {% for m in tts_choices %}<option value="{{ m }}">{{ m }}</option>{% endfor %}
-        </select>
-      </label>
-    {% endif %}
+    <p class="hint">You pick models and voices on the next screen, before
+      anything is spent.</p>
   </form>
 
   <section class="queue" id="queue" data-count="{{ queue|length }}">

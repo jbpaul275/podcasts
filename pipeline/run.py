@@ -46,7 +46,8 @@ def _run_scripting(episode_id: str, cfg: dict) -> None:
             req = {}
 
     notes = (req.get("instructions") or "").strip()
-    model = req.get("model") or None
+    # A rewrite names its own model; otherwise use the one picked in the wizard.
+    model = req.get("model") or (ep["script_model_wanted"] if ep else None) or None
     if req.get("mode") == "revise" and notes:
         text = script.revise_script(episode_id, cfg, notes, model=model)
     else:

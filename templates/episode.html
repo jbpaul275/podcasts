@@ -18,6 +18,14 @@
 
   {% if done %}<p class="flash ok" role="status">{{ done }}</p>{% endif %}
 
+  {% if admin and ep.status == 'draft' %}
+    <section class="gapwarn">
+      <h2>Not built yet</h2>
+      <p>This paper is stored and checked, but nothing has been spent on it.
+        <a href="/episode/{{ ep.id }}/setup">Choose its models and voices</a> to start.</p>
+    </section>
+  {% endif %}
+
   {% if admin and ep.error %}<p class="error">{{ ep.error }}</p>{% endif %}
 
   {% if admin and ep.progress %}
@@ -40,7 +48,11 @@
   {% if ep.has_audio %}
     <audio class="player" controls preload="metadata" src="/episode/{{ ep.id }}/audio"></audio>
   {% else %}
-    <p class="muted pending">No audio yet — this page refreshes itself while the episode is processing.</p>
+    {% if ep.status == 'draft' %}
+      <p class="muted pending">No audio yet — this one is waiting on its setup.</p>
+    {% else %}
+      <p class="muted pending">No audio yet — this page refreshes itself while the episode is processing.</p>
+    {% endif %}
   {% endif %}
 
   {% if admin and ep.abstract %}
