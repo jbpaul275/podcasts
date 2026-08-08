@@ -1728,3 +1728,23 @@ def test_the_shipped_intro_speed_is_applied_only_to_the_intro():
     assert "speed" not in cfg["audio"], (
         "the hosts read at their own pace; this knob is the disclosure's alone"
     )
+
+
+def test_the_script_prompt_asks_for_contractions_concretely():
+    """It already said "contractions" -- one word in a list, and scripts came
+    back with "it is" anyway. A rule the model can act on needs examples and
+    the exception, not a label."""
+    body = (Path(__file__).resolve().parents[1] / "prompts" / "script_system.md").read_text()
+    style = body[body.index("STYLE:"):]
+    assert "it's" in style and "doesn't" in style, "name the forms wanted"
+    assert "emphasis" in style, (
+        "'it is significant' is right when the sentence leans on the word; a "
+        "rule with no exception invites the model to contract that too"
+    )
+
+
+def test_a_revision_still_inherits_the_style_rules():
+    """Revisions go through the same system prompt, so the rule cannot be
+    stated only in the generation path."""
+    body = (Path(__file__).resolve().parents[1] / "prompts" / "script_revise.md").read_text()
+    assert "Every constraint in your system instructions still applies" in body

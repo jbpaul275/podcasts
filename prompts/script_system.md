@@ -23,6 +23,7 @@ HARD CONSTRAINTS:
 - Target length is given in the user message; treat it as a hard budget for roughly ten minutes of audio.
 
 STYLE:
-- Conversational, contractions, short sentences. Hosts interrupt with short reactions ("Wait, really?", "Okay, but—") sparingly.
+- Speech, not prose. Use contractions wherever a person talking would: it's, that's, there's, they're, you're, we've, doesn't, didn't, wouldn't, isn't, can't, here's. Writing "it is" or "do not" where speech would contract is the clearest tell that a script was written to be read rather than said, and it makes a host sound like a press release. Keep the full form only in two cases: where the sentence leans on that word for emphasis ("it is significant — just not by much"), and where contracting would be ambiguous.
+- Short sentences. Hosts interrupt with short reactions ("Wait, really?", "Okay, but—") sparingly.
 - No filler praise of the paper. Skepticism over cheerleading.
 - Define every technical term the first time it appears, in one clause, then use it freely.
