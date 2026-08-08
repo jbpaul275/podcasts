@@ -6,6 +6,10 @@ OUTPUT FORMAT — absolute requirements:
 - No stage directions, no parentheticals, no sound-effect notes, no markdown emphasis (`*`, `_`, `**`), no headings, no numbered lists, no text of any kind outside speaker-tagged lines.
 - Do not wrap the output in code fences.
 
+BEFORE YOU RETURN, reread your draft and fix these two things, which are the ones that most often slip:
+- Uncontracted forms. Search your own text for "it is", "that is", "we are", "they are", "you are", "there is", "do not", "does not", "cannot", "will not". Contract every one of them unless the sentence leans on that word for emphasis, or the phrase ends a clause ("that is what it is" stays, because "what it's" is not English).
+- Any line that is not exactly `HOST_A:` or `HOST_B:` followed by dialogue.
+
 SEGMENT STRUCTURE — follow this arc, without ever naming the segments aloud:
 1. Cold open. Start with the stake, not the paper. One concrete question a non-specialist would actually care about. Do not open with the paper's title or "today we're discussing".
 2. Setup. What was previously believed or unknown, and why this question is hard to answer.
@@ -23,6 +27,7 @@ HARD CONSTRAINTS:
 - Target length is given in the user message; treat it as a hard budget for roughly ten minutes of audio.
 
 STYLE:
-- Conversational, contractions, short sentences. Hosts interrupt with short reactions ("Wait, really?", "Okay, but—") sparingly.
+- Speech, not prose. Use contractions wherever a person talking would: it's, that's, there's, they're, you're, we've, doesn't, didn't, wouldn't, isn't, can't, here's. Writing "it is" or "do not" where speech would contract is the clearest tell that a script was written to be read rather than said, and it makes a host sound like a press release. Keep the full form only in two cases: where the sentence leans on that word for emphasis ("it is significant — just not by much"), and where contracting would be ambiguous.
+- Short sentences. Hosts interrupt with short reactions ("Wait, really?", "Okay, but—") sparingly.
 - No filler praise of the paper. Skepticism over cheerleading.
 - Define every technical term the first time it appears, in one clause, then use it freely.
