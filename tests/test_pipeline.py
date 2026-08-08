@@ -1796,3 +1796,29 @@ def test_the_script_prompt_bans_notation_that_cannot_be_read_aloud():
     for written_only in ("~15%", "et al.", "vs.", "R²"):
         assert written_only in fmt, f"name {written_only!r} rather than gesturing at symbols"
     assert "p-value" in fmt, "printing one is the common case in an empirical paper"
+
+
+def test_the_web_artwork_is_web_sized():
+    """The feed's 3000px artwork is a megabyte. Serving that to draw an 88px
+    square on every page load is the kind of thing nobody notices until the
+    site is slow on a phone."""
+    import struct
+
+    static = Path(__file__).resolve().parents[1] / "static"
+    web, feed = static / "cover-web.png", static / "cover.png"
+    assert web.exists(), "rendered by tools/make_cover.py and committed"
+
+    w, h, _, colour = struct.unpack(">IIBB", web.read_bytes()[16:26])
+    assert w == h, "square, like the artwork it comes from"
+    assert w <= 1024, "a header tile, not a print master"
+    assert colour == 2, "RGB, matching the feed artwork"
+    assert web.stat().st_size < feed.stat().st_size / 5
+
+
+def test_the_home_page_does_not_load_the_print_master():
+    body = (Path(__file__).resolve().parents[1] / "templates" / "library.html").read_text()
+    assert "cover-web.png" in body
+    assert "static_url('cover-web.png')" in body, (
+        "cache-busted like the other assets, or a re-render serves stale art"
+    )
+    assert "'cover.png'" not in body and '"cover.png"' not in body

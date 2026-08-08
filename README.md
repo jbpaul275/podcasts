@@ -170,7 +170,7 @@ Two things that are easy to get wrong and produce an unhelpful rejection:
 
 - **Artwork must be square, 1400×1400 to 3000×3000.** This is the most common rejection. `static/cover.png` ships at 3000×3000 RGB, and a test asserts it stays inside the bounds.
 
-  The source is `static/cover.svg` — edit that and re-render rather than editing the PNG, so the type stays sharp at 3000px. It is drawn to survive being shrunk: podcast apps show artwork at ~55px in the now-playing bar, so the wordmark is set large and the waveform uses few fat bars rather than many thin ones, which merge into a smear at that size.
+  The source is `static/cover.svg` — edit that and run `python tools/make_cover.py` rather than editing a PNG, which the next re-render would silently throw away. It writes two files: `cover.png` at 3000px for the directories, and `cover-web.png` at 512px for the site header, because serving a megabyte to draw an 88px square is the kind of thing nobody notices until the site is slow on a phone. Chromium is needed to render, but only to render — the PNGs are committed, so nothing at runtime or in the container needs a browser. It is drawn to survive being shrunk: podcast apps show artwork at ~55px in the now-playing bar, so the wordmark is set large and the waveform uses few fat bars rather than many thin ones, which merge into a smear at that size.
 
   The tagline reads *"Difficult papers, explained simply"*. Episodes are **discussions of** papers, not readings of them — the script prompt caps verbatim quotation at fifteen consecutive words for exactly that reason. Wording that implies otherwise is a claim the project cannot make.
 - **`itunes:category` must be spelled exactly as in Apple's list.** The readiness check holds the list and rejects anything else.
@@ -335,6 +335,6 @@ pipeline/
   run.py             orchestrator, stage state machine
 prompts/             editable without touching code
 templates/ static/   Jinja2 + vanilla JS, no build step
-tools/make_cover.py  regenerates static/cover.png
+tools/make_cover.py  renders static/cover.svg to the two PNGs
 data/                inbox/, papers/, audio/chunks/, audio/final/, paperpod.db
 ```

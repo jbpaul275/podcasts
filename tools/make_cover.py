@@ -1,65 +1,87 @@
-"""Generate static/cover.png, the artwork the RSS feed points at.
+"""Render static/cover.svg to the PNGs the site and the feed point at.
 
-Stdlib-only PNG encoder so the repo needs no image dependency. Podcast clients
-want square art; 1400x1400 is the smallest size Apple accepts.
+Two sizes, for two different jobs:
+
+- cover.png at 3000px is what Apple and Spotify ingest. They want square art
+  between 1400 and 3000, and directories keep the file rather than re-fetching
+  it, so it is worth shipping at the top of the range.
+- cover-web.png is what the site header loads. Serving the 3000px file to every
+  visitor would be a megabyte to draw a 112px square.
+
+The source of truth is the SVG. Editing a PNG instead means the next re-render
+silently throws the edit away.
+
+Usage:  python tools/make_cover.py
+Needs Chromium, which is a development dependency only -- the rendered PNGs are
+committed, so nothing at runtime or in the container needs a browser.
 """
 
-import struct
+import shutil
+import subprocess
 import sys
-import zlib
+import tempfile
 from pathlib import Path
 
-SIZE = 1400
+ROOT = Path(__file__).resolve().parents[1]
+SVG = ROOT / "static" / "cover.svg"
+
+# (filename, pixels). The feed size first: it is the one with a hard external
+# requirement, so a failure there should be the first thing that shows up.
+OUTPUTS = [("cover.png", 3000), ("cover-web.png", 512)]
+
+CHROME_CANDIDATES = [
+    "/opt/pw-browsers/chromium-1194/chrome-linux/chrome",
+    "chromium",
+    "chromium-browser",
+    "google-chrome",
+]
 
 
-def _chunk(tag: bytes, data: bytes) -> bytes:
-    return (
-        struct.pack(">I", len(data))
-        + tag
-        + data
-        + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+def _chrome() -> str:
+    for candidate in CHROME_CANDIDATES:
+        found = candidate if Path(candidate).exists() else shutil.which(candidate)
+        if found:
+            return found
+    raise SystemExit(
+        "No Chromium found. This is a development-only tool; the rendered PNGs "
+        "are committed, so nothing else needs a browser.\n"
+        "Looked for: " + ", ".join(CHROME_CANDIDATES)
     )
 
 
-def make_cover(path: Path, size: int = SIZE) -> None:
-    top = (24, 30, 42)
-    bottom = (46, 62, 92)
-    bar = (208, 214, 226)
+def render(size: int, out: Path) -> None:
+    chrome = _chrome()
+    with tempfile.TemporaryDirectory() as tmp:
+        # Chromium screenshots the viewport, so the page has to be exactly the
+        # square wanted -- no margin, no scrollbars, no white gutter.
+        page = Path(tmp) / "page.html"
+        page.write_text(
+            "<style>html,body{margin:0;padding:0;overflow:hidden}"
+            f"img{{display:block;width:{size}px;height:{size}px}}</style>"
+            f'<img src="{SVG.as_uri()}">',
+            encoding="utf-8",
+        )
+        subprocess.run(
+            [chrome, "--headless", "--no-sandbox", "--disable-gpu",
+             # No transparent background: that yields RGBA, and directories
+             # want plain RGB. The artwork is full-bleed, so nothing shows
+             # through anyway.
+             "--hide-scrollbars",
+             f"--window-size={size},{size}",
+             f"--screenshot={out}", page.as_uri()],
+            check=True, capture_output=True,
+        )
 
-    rows = bytearray()
-    for y in range(size):
-        t = y / (size - 1)
-        r = round(top[0] + (bottom[0] - top[0]) * t)
-        g = round(top[1] + (bottom[1] - top[1]) * t)
-        b = round(top[2] + (bottom[2] - top[2]) * t)
-        row = bytearray([0])  # filter byte: none
-        # A stack of "paper" lines across the middle, ragged like a page of text.
-        line_band = 0.30 <= t <= 0.70
-        band_index = int((t - 0.30) / 0.055) if line_band else -1
-        widths = [0.62, 0.74, 0.55, 0.80, 0.48, 0.70, 0.36]
-        width = widths[band_index % len(widths)] if line_band else 0
-        thick = line_band and (int(y * 1.0) % 77) < 34
-        x_start = int(size * 0.16)
-        x_end = x_start + int(size * width)
-        for x in range(size):
-            if thick and x_start <= x < x_end:
-                row += bytes(bar)
-            else:
-                row += bytes((r, g, b))
-        rows += row
 
-    png = (
-        b"\x89PNG\r\n\x1a\n"
-        + _chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0))
-        + _chunk(b"IDAT", zlib.compress(bytes(rows), 9))
-        + _chunk(b"IEND", b"")
-    )
-    path.write_bytes(png)
+def main() -> int:
+    if not SVG.exists():
+        raise SystemExit(f"missing {SVG}")
+    for name, size in OUTPUTS:
+        out = ROOT / "static" / name
+        render(size, out)
+        print(f"{name}: {size}x{size}, {out.stat().st_size / 1024:.0f} KB")
+    return 0
 
 
 if __name__ == "__main__":
-    out = Path(sys.argv[1]) if len(sys.argv) > 1 else (
-        Path(__file__).resolve().parent.parent / "static" / "cover.png"
-    )
-    make_cover(out)
-    print(f"wrote {out} ({out.stat().st_size} bytes)")
+    sys.exit(main())

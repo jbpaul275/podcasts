@@ -7,9 +7,17 @@
 <div class="{{ 'adminlayout' if admin }}">
 <div class="libcol">
 
+{# The show's artwork, at the size a podcast app shows it beside a title —
+   this is the same image someone saw in Apple or Spotify, and recognising it
+   is the point. Deliberately not a hero: the episode list is what the page is
+   for, and a full-width square would push it under the fold. #}
 <div class="libhead">
-  <h1>{{ feed_title }}</h1>
-  <p class="blurb">{{ feed_description }}</p>
+  <img class="showart" src="{{ static_url('cover-web.png') }}" width="512" height="512"
+       alt="" decoding="async">
+  <div class="libtitle">
+    <h1>{{ feed_title }}</h1>
+    <p class="blurb">{{ feed_description }}</p>
+  </div>
 </div>
 
 {% if chips or sorts or vis_chips %}
