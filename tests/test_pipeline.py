@@ -2055,16 +2055,20 @@ def test_a_policy_narrows_the_range_rather_than_fixing_a_number(_isolated_db):
     assert outline.resolve_length(middling, _OUT_CFG, "auto")[0] == 2400
 
 
+_SEGS = ["Cold open", "Setup", "Identification", "Findings", "Pressure",
+         "Context", "So what"]
+
+
 def test_a_malformed_outline_is_rejected_not_half_used(_isolated_db):
     """Half a beat sheet would silently produce half an episode."""
     from pipeline import outline
 
     with pytest.raises(ValueError):
-        outline._parse('{"beats": []}')
+        outline._parse('{"beats": []}', _SEGS)
     with pytest.raises(ValueError):
-        outline._parse('"not an object"')
+        outline._parse('"not an object"', _SEGS)
     with pytest.raises(ValueError, match="none were usable"):
-        outline._parse('{"beats": [{"segment": "Nonsense", "covers": "x"}]}')
+        outline._parse('{"beats": [{"segment": "Nonsense", "covers": "x"}]}', _SEGS)
 
 
 def test_segment_names_are_canonicalised(_isolated_db):
@@ -2073,7 +2077,7 @@ def test_segment_names_are_canonicalised(_isolated_db):
     from pipeline import outline
 
     parsed = outline._parse(
-        '{"beats": [{"segment": "cold OPEN", "covers": "x", "words": 200}]}')
+        '{"beats": [{"segment": "cold OPEN", "covers": "x", "words": 200}]}', _SEGS)
     assert parsed["beats"][0]["segment"] == "Cold open"
 
 
@@ -2110,11 +2114,129 @@ def test_the_two_prompts_agree_on_the_arc():
     """The segment names live in three places -- the outline prompt, the script
     prompt and outline.SEGMENTS. Drift between them would have the writer
     ignoring beats it does not recognise."""
-    from pipeline.outline import SEGMENTS
+    from pipeline import arc
 
+    # Both prompts splice the same file, so the only way they can disagree is
+    # if one stops splicing it.
     root = Path(__file__).resolve().parents[1] / "prompts"
-    plan = root.joinpath("outline.md").read_text()
-    write = root.joinpath("script_system.md").read_text()
-    for segment in SEGMENTS:
-        assert segment.casefold() in plan.casefold(), f"{segment} missing from outline.md"
-        assert segment.casefold() in write.casefold(), f"{segment} missing from script_system.md"
+    for name in ("outline.md", "script_system.md"):
+        assert "$ARC" in root.joinpath(name).read_text(), f"{name} lost its arc"
+    for kind in arc.KINDS:
+        names = arc.segments(kind)
+        assert len(names) == 7, f"{kind} arc parsed as {names}"
+        assert names[0] == "Cold open"
+
+
+# ------------------------------------------------- research dossier and arcs
+
+def test_an_entry_without_a_source_is_dropped(_isolated_db):
+    """The rule the whole stage rests on. An unsourced entry reads exactly like
+    a sourced one once it is in the dossier, so it cannot be flagged for later
+    -- it has to not be there."""
+    from pipeline import dossier
+
+    data = dossier._parse(json.dumps({"reception": "mixed", "entries": [
+        {"who": "Karl Popper", "what": "objected to irrationalism",
+         "kind": "critic", "source": "https://example.org/popper"},
+        {"who": "Somebody", "what": "said a thing", "kind": "critic"},
+        {"who": "Nobody", "what": "said another", "kind": "critic", "source": ""},
+    ]}))
+
+    assert [e["who"] for e in data["entries"]] == ["Karl Popper"]
+    assert data["dropped"] == 2
+
+
+def test_a_source_must_be_a_real_link(_isolated_db):
+    """This value is rendered as an href on an admin page, so a javascript:
+    entry would be script injection by way of a research note."""
+    from pipeline import dossier
+
+    data = dossier._parse(json.dumps({"entries": [
+        {"who": "A", "what": "x", "source": "javascript:alert(1)"},
+        {"who": "B", "what": "y", "source": "not a url"},
+        {"who": "C", "what": "z", "source": "https://ok.example/page"},
+    ]}))
+    assert [e["who"] for e in data["entries"]] == ["C"]
+
+
+def test_the_dossier_corroborates_names_the_paper_never_mentions(_isolated_db):
+    """Otherwise every critic the research turned up flags as a possible
+    fabrication, and a flag list that is mostly noise is one nobody reads."""
+    from pipeline import dossier, script
+
+    data = {"reception": "", "entries": [
+        {"who": "Imre Lakatos", "what": "proposed research programmes",
+         "kind": "critic", "source": "https://example.org/l"}]}
+    corpus = dossier.corroboration(data)
+
+    flags = script.citation_flags(
+        "HOST_A: Lakatos (1970) pushed back on exactly that.",
+        paper_text="nothing about that here", grounding_text=corpus)
+    assert flags and all(f["in_paper"] for f in flags)
+    assert flags[0]["source"] == "web"
+
+
+def test_research_only_runs_when_it_was_asked_for(_isolated_db):
+    """Off by default: a search-grounded call on top of an already expensive
+    pipeline, and most papers do not need it."""
+    import db
+    from pipeline import dossier
+
+    db.create_episode("ENORES", "/tmp/n.pdf", "sha-nores")
+    assert not dossier.wanted(db.get_episode("ENORES"))
+    dossier.research("ENORES", {})          # no PDF, no client: proves it returned
+
+    db.update_episode("ENORES", research="on")
+    assert dossier.wanted(db.get_episode("ENORES"))
+
+
+def test_the_two_arcs_differ_where_it_matters(_isolated_db):
+    """A book of philosophy has no identification strategy and no effect sizes.
+    Asking it for them produces an episode about nothing."""
+    from pipeline import arc
+
+    empirical = arc.segments(arc.EMPIRICAL)
+    theoretical = arc.segments(arc.THEORETICAL)
+
+    assert "Identification" in empirical and "Findings" in empirical
+    assert "Identification" not in theoretical and "Findings" not in theoretical
+    assert "The move" in theoretical and "The case" in theoretical
+    # Both keep the beats that are about the listener rather than the method.
+    for shared in ("Cold open", "Pressure", "Context", "So what"):
+        assert shared in empirical and shared in theoretical
+
+    assert "magnitudes" in arc.text(arc.EMPIRICAL)
+    assert "magnitudes" not in arc.text(arc.THEORETICAL)
+
+
+def test_an_unknown_kind_falls_back_to_the_empirical_arc(_isolated_db):
+    """Most uploads are papers, and that is the arc with mileage on it."""
+    import db
+    from pipeline import arc
+
+    db.create_episode("EKIND", "/tmp/k.pdf", "sha-kind")
+    assert arc.kind_of(db.get_episode("EKIND")) == arc.EMPIRICAL
+
+    db.update_episode("EKIND", work_kind="philosophy")
+    assert arc.kind_of(db.get_episode("EKIND")) == arc.EMPIRICAL
+    assert arc.clean_kind("THEORETICAL") == arc.THEORETICAL
+
+    db.update_episode("EKIND", work_kind="theoretical")
+    assert arc.kind_of(db.get_episode("EKIND")) == arc.THEORETICAL
+
+
+def test_the_dossier_prompt_forbids_quotation():
+    """Putting invented words in the mouth of a named, often living, academic
+    is the highest-risk thing this system could do, and it ships as audio."""
+    body = (Path(__file__).resolve().parents[1] / "prompts" / "dossier.md").read_text()
+    assert "Never invent a quotation" in body
+    assert "source" in body.casefold()
+
+
+def test_a_script_with_no_research_is_told_to_hedge(_isolated_db):
+    import db
+    from pipeline import script
+
+    db.create_episode("ENOD", "/tmp/d.pdf", "sha-nod")
+    brief = script._dossier_brief(db.get_episode("ENOD"))
+    assert "No research was done" in brief and "Hedge" in brief

@@ -7,3 +7,7 @@ THE PLAN FOR THIS EPISODE — a beat sheet written after reading the same paper.
 Follow it rather than improvising a new shape. If a beat turns out to be thinner than planned, spend the difference on the beat it belongs with, not on padding.
 
 $OUTLINE
+
+RESEARCH ON HOW THIS WORK LANDED:
+
+$RESEARCH

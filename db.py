@@ -121,6 +121,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
                        ("outline_json", "TEXT"),
                        ("target_words", "INTEGER"),
                        ("length_policy", "TEXT"),
+                       ("dossier_json", "TEXT"),
+                       ("research", "TEXT"),
+                       ("work_kind", "TEXT"),
                        ("failed_at", "TEXT"),
                        ("flags_reviewed", "INTEGER DEFAULT 0")):
         if name not in cols:

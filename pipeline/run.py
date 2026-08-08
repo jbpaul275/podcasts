@@ -11,13 +11,14 @@ import logging
 import traceback
 
 import db
-from . import PipelineError, assemble, ingest, outline, script, tts
+from . import PipelineError, assemble, dossier, ingest, outline, script, tts
 
 log = logging.getLogger("paperpod.run")
 
 # stage name -> (status while running, callable)
 STAGES: list[tuple[str, object]] = [
     ("extracting", ingest.extract_metadata),
+    ("researching", dossier.research),
     ("outlining", outline.build_outline),
     ("scripting", None),  # bound below; needs a post-step
     ("synthesizing", tts.synthesize),
@@ -71,7 +72,7 @@ def _run_scripting(episode_id: str, cfg: dict) -> None:
         )
 
 
-STAGES[2] = ("scripting", _run_scripting)
+STAGES[3] = ("scripting", _run_scripting)
 
 
 def resume_stage_for(status: str) -> str:
