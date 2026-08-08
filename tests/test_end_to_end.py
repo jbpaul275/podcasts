@@ -131,8 +131,7 @@ def env(tmp_path, monkeypatch):
             break
 
     gemini_mod.THROTTLE.reset()
-    monkeypatch.setattr(ingest, "PAPERS_DIR", papers)
-    monkeypatch.setattr(script_mod, "PAPERS_DIR", papers)
+    monkeypatch.setattr(db, "PAPERS_DIR", papers)
     monkeypatch.setattr(tts, "CHUNKS_DIR", chunks)
     monkeypatch.setattr(intro_mod, "CHUNKS_DIR", chunks)
     monkeypatch.setattr(assemble, "CHUNKS_DIR", chunks)
@@ -143,7 +142,7 @@ def env(tmp_path, monkeypatch):
 
     def fake_metadata(episode_id, cfg):
         calls["metadata"] += 1
-        db.update_episode(
+        db.update_principal(
             episode_id,
             title="Minimum Wages and Employment",
             authors=json.dumps(["David Card", "Alan Krueger"]),
@@ -288,6 +287,7 @@ def test_duplicate_pdf_is_skipped(env, tmp_path):
 
 
 def test_ingest_never_mutates_source(env, tmp_path):
+    import db
     from pipeline import ingest
 
     pdf = tmp_path / "paper.pdf"
@@ -296,7 +296,7 @@ def test_ingest_never_mutates_source(env, tmp_path):
     episode_id = ingest.ingest_pdf(pdf, env["cfg"])
 
     assert pdf.exists() and pdf.read_bytes() == before
-    assert (env["papers"] / f"{episode_id}.pdf").exists()
+    assert all(p.exists() for p in db.paper_paths(episode_id))
 
 
 # ------------------------------------------------------------- full run
@@ -616,7 +616,6 @@ def client(env, tmp_path, monkeypatch):
 
     monkeypatch.setattr(app_mod, "CFG", env["cfg"])
     monkeypatch.setattr(app_mod, "FINAL_DIR", env["final"])
-    monkeypatch.setattr(app_mod, "PAPERS_DIR", env["papers"])
     monkeypatch.setattr(app_mod, "CHUNKS_DIR", env["chunks"])
     monkeypatch.setattr(app_mod, "_worker", lambda *a: None)
     monkeypatch.setattr(app_mod, "_watch_inbox", lambda: None)
@@ -732,8 +731,8 @@ def test_library_lists_episodes(client, env, tmp_path):
     from pipeline import ingest
 
     episode_id = ingest.ingest_pdf((lambda p: (_make_pdf(p), p)[1])(tmp_path / "a.pdf"), env["cfg"])
-    db.update_episode(episode_id, title="A Paper About Wages",
-                      authors=json.dumps(["Jane Roe"]), status="done")
+    db.update_episode(episode_id, status="done")
+    db.update_principal(episode_id, title="A Paper About Wages", authors=json.dumps(["Jane Roe"]))
 
     html = client.get("/admin").text
     assert "A Paper About Wages" in html
@@ -747,11 +746,8 @@ def test_library_shows_summary_and_play_button(client, env, tmp_path):
     pdf = tmp_path / "a.pdf"
     _make_pdf(pdf)
     episode_id = ingest.ingest_pdf(pdf, env["cfg"])
-    db.update_episode(
-        episode_id, title="Border Counties", status="done",
-        summary="Raising the minimum wage barely moved employment.",
-        audio_path=str(pdf), duration_s=612.0,
-    )
+    db.update_episode(episode_id, status="done", audio_path=str(pdf), duration_s=612.0)
+    db.update_principal(episode_id, title="Border Counties", summary="Raising the minimum wage barely moved employment.")
 
     _publish(episode_id)
     html = client.get("/").text
@@ -768,11 +764,9 @@ def test_library_falls_back_to_abstract_when_no_summary(client, env, tmp_path):
     pdf = tmp_path / "a.pdf"
     _make_pdf(pdf)
     episode_id = ingest.ingest_pdf(pdf, env["cfg"])
-    db.update_episode(
-        episode_id, title="Old Episode", status="done",
-        abstract="We study minimum wages. We use a border design. A third sentence "
-                 "that should not appear in the listing at all.",
-    )
+    db.update_episode(episode_id, status="done")
+    db.update_principal(episode_id, title="Old Episode", abstract="We study minimum wages. We use a border design. A third sentence "
+                 "that should not appear in the listing at all.")
 
     _publish(episode_id)
     html = client.get("/").text
@@ -799,7 +793,8 @@ def test_no_play_button_before_audio_exists(client, env, tmp_path):
     pdf = tmp_path / "a.pdf"
     _make_pdf(pdf)
     episode_id = ingest.ingest_pdf(pdf, env["cfg"])
-    db.update_episode(episode_id, title="Still Cooking", status="scripting")
+    db.update_episode(episode_id, status="scripting")
+    db.update_principal(episode_id, title="Still Cooking")
 
     html = client.get("/admin").text
     assert "Still Cooking" in html
@@ -814,13 +809,9 @@ def test_episode_title_and_attribution(client, env, tmp_path):
     pdf = tmp_path / "a.pdf"
     _make_pdf(pdf)
     eid = ingest.ingest_pdf(pdf, env["cfg"])
-    db.update_episode(
-        eid, status="done", summary="A blurb.",
-        title="AMBIGUOUS ATTRIBUTION: THEORY AND EVIDENCE",
-        authors=json.dumps(["Ricardo Alonso", "Monica Martinez-Bravo",
-                            "Gerard Padró I Miquel", "Carlos Sanz"]),
-        episode_title="Who gets blamed when nobody knows who decided",
-    )
+    db.update_episode(eid, status="done", episode_title="Who gets blamed when nobody knows who decided")
+    db.update_principal(eid, summary="A blurb.", title="AMBIGUOUS ATTRIBUTION: THEORY AND EVIDENCE", authors=json.dumps(["Ricardo Alonso", "Monica Martinez-Bravo",
+                            "Gerard Padró I Miquel", "Carlos Sanz"]))
 
     _publish(eid)
     for url in ("/", f"/episode/{eid}"):
@@ -839,8 +830,8 @@ def test_falls_back_to_paper_title_before_scripting(client, env, tmp_path):
     pdf = tmp_path / "a.pdf"
     _make_pdf(pdf)
     eid = ingest.ingest_pdf(pdf, env["cfg"])
-    db.update_episode(eid, title="A Perfectly Fine Paper Title", status="scripting",
-                      authors=json.dumps(["Jane Roe"]))
+    db.update_episode(eid, status="scripting")
+    db.update_principal(eid, title="A Perfectly Fine Paper Title", authors=json.dumps(["Jane Roe"]))
 
     html = client.get("/admin").text
     assert "A Perfectly Fine Paper Title" in html
@@ -891,8 +882,8 @@ def test_failures_are_collapsed_out_of_the_reading_list(client, env, tmp_path):
         pdf = tmp_path / f"{name}.pdf"
         _make_pdf(pdf)
         eid = ingest.ingest_pdf(pdf, env["cfg"])
-        db.update_episode(eid, title=title, status=status, error=err,
-                          summary=f"Summary of {title}.")
+        db.update_episode(eid, status=status, error=err)
+        db.update_principal(eid, title=title, summary=f"Summary of {title}.")
 
     html = client.get("/admin").text
     assert "A Finished Episode" in html
@@ -912,7 +903,8 @@ def test_long_error_is_truncated_in_the_library(client, env, tmp_path):
     _make_pdf(pdf)
     eid = ingest.ingest_pdf(pdf, env["cfg"])
     dump = "loudnorm measurement pass produced no JSON: " + ("size=N/A time=00:12:34 " * 80)
-    db.update_episode(eid, title="Noisy Failure", status="failed", error=dump)
+    db.update_episode(eid, status="failed", error=dump)
+    db.update_principal(eid, title="Noisy Failure")
 
     html = client.get("/admin").text
     assert "loudnorm measurement pass produced no JSON" in html
@@ -937,10 +929,8 @@ def test_episode_page_shows_script_and_flags(client, env, tmp_path):
     pdf = tmp_path / "a.pdf"
     _make_pdf(pdf)
     episode_id = ingest.ingest_pdf(pdf, env["cfg"])
-    db.update_episode(
-        episode_id, title="Flagged Paper", status="done",
-        script_md="HOST_A: As Card and Krueger (1994) showed, wages rose.\nHOST_B: Fair.",
-    )
+    db.update_episode(episode_id, status="done", script_md="HOST_A: As Card and Krueger (1994) showed, wages rose.\nHOST_B: Fair.")
+    db.update_principal(episode_id, title="Flagged Paper")
 
     html = client.get(f"/episode/{episode_id}").text
     assert "Flagged Paper" in html
@@ -1016,7 +1006,8 @@ def test_feed_excludes_unfinished_episodes(client, env, tmp_path):
     pdf = tmp_path / "a.pdf"
     _make_pdf(pdf)
     episode_id = ingest.ingest_pdf(pdf, env["cfg"])
-    db.update_episode(episode_id, title="Still Cooking", status="synthesizing")
+    db.update_episode(episode_id, status="synthesizing")
+    db.update_principal(episode_id, title="Still Cooking")
 
     root = ET.fromstring(client.get("/feed.xml").content)
     assert root.find("channel").findall("item") == []
@@ -1031,8 +1022,8 @@ def test_feed_escapes_xml_in_titles(client, env, tmp_path):
     pdf = tmp_path / "a.pdf"
     _make_pdf(pdf)
     episode_id = ingest.ingest_pdf(pdf, env["cfg"])
-    db.update_episode(episode_id, status="done", audio_path=str(pdf), published=1,
-                      title="Wages & Jobs: <Reconsidered>", duration_s=610.0)
+    db.update_episode(episode_id, status="done", audio_path=str(pdf), published=1, duration_s=610.0)
+    db.update_principal(episode_id, title="Wages & Jobs: <Reconsidered>")
 
     root = ET.fromstring(client.get("/feed.xml").content)  # would raise if unescaped
     assert root.find("channel/item/title").text == "Wages & Jobs: <Reconsidered>"
@@ -1048,7 +1039,7 @@ def test_delete_removes_row_and_files(client, env, tmp_path):
     assert client.delete(f"/episode/{episode_id}").status_code == 200
     assert db.get_episode(episode_id) is None
     assert not (env["final"] / f"{episode_id}.mp3").exists()
-    assert not (env["papers"] / f"{episode_id}.pdf").exists()
+    assert not list(env["papers"].glob("*.pdf"))
     assert not (env["chunks"] / episode_id).exists()
 
 
@@ -1095,7 +1086,6 @@ def public_client(env, tmp_path, monkeypatch):
     monkeypatch.setenv("PAPERPOD_ADMIN_PASSWORD", "hunter2")
     monkeypatch.setattr(app_mod, "CFG", env["cfg"])
     monkeypatch.setattr(app_mod, "FINAL_DIR", env["final"])
-    monkeypatch.setattr(app_mod, "PAPERS_DIR", env["papers"])
     monkeypatch.setattr(app_mod, "CHUNKS_DIR", env["chunks"])
     monkeypatch.setattr(app_mod, "_worker", lambda *a: None)
     monkeypatch.setattr(app_mod, "_watch_inbox", lambda: None)
@@ -1110,7 +1100,11 @@ def _episode(env, tmp_path, name="a", **fields):
     pdf = tmp_path / f"{name}.pdf"
     _make_pdf(pdf)
     eid = ingest.ingest_pdf(pdf, env["cfg"])
-    db.update_episode(eid, **fields)
+    # Callers set up a whole episode in one line and should not have to know
+    # which half of it each field lives in; the split is db's business.
+    paper = {k: v for k, v in fields.items() if k in db.PAPER_FIELDS}
+    db.update_episode(eid, **{k: v for k, v in fields.items() if k not in paper})
+    db.update_principal(eid, **paper)
     return eid
 
 
@@ -1617,7 +1611,8 @@ def test_feed_includes_the_source_paper_link(public_client, env, tmp_path):
     import db
 
     eid = _done_episode(env, tmp_path)
-    db.update_episode(eid, published=1, source_url="https://example.org/paper.pdf")
+    db.update_episode(eid, published=1)
+    db.update_principal(eid, source_url="https://example.org/paper.pdf")
 
     root = ET.fromstring(public_client.get("/feed.xml").content)
     assert "https://example.org/paper.pdf" in root.find("channel/item/description").text
@@ -1695,14 +1690,13 @@ def test_clone_reuses_the_script_with_a_different_model(public_client, env, tmp_
 
     import app as app_mod
     monkeypatch.setattr(app_mod, "tts_choices", lambda: ["model-a", "model-b"])
-    monkeypatch.setattr(app_mod, "PAPERS_DIR", env["papers"])
     public_client.post("/admin/login", data={"password": "hunter2"})
 
     pdf = tmp_path / "paper.pdf"
     _make_pdf(pdf)
     src = ingest.ingest_pdf(pdf, env["cfg"])
     run.run_episode(src, env["cfg"])
-    db.update_episode(src, source_url="https://example.org/p.pdf")
+    db.update_principal(src, source_url="https://example.org/p.pdf")
 
     resp = public_client.post(f"/episode/{src}/clone", data={"tts_model": "model-b"},
                               follow_redirects=False)
@@ -1716,7 +1710,11 @@ def test_clone_reuses_the_script_with_a_different_model(public_client, env, tmp_
     assert clone["source_url"] == original["source_url"]
     assert clone["tts_model"] == "model-b"
     assert original["tts_model"] is None, "the source is left alone"
-    assert (env["papers"] / f"{new_id}.pdf").exists(), "PDF copied for flag checking"
+    # The clone points at the same paper rather than a second copy of it: same
+    # work, same bytes, and one place to correct if the metadata is wrong.
+    assert db.paper_paths(new_id) == db.paper_paths(src)
+    assert db.paper_paths(new_id)[0].exists(), "still readable for flag checking"
+    assert len(list(env["papers"].glob("*.pdf"))) == 1, "no second copy on disk"
     assert app_mod.WORK_Q.get_nowait() == {"id": new_id, "from_stage": "synthesizing", "stop_after": None}, "skips scripting"
 
 
@@ -1781,7 +1779,6 @@ def test_publishing_one_rendering_demotes_the_others(public_client, env, tmp_pat
 
     import app as app_mod
     monkeypatch.setattr(app_mod, "tts_choices", lambda: ["model-a", "model-b"])
-    monkeypatch.setattr(app_mod, "PAPERS_DIR", env["papers"])
     public_client.post("/admin/login", data={"password": "hunter2"})
 
     pdf = tmp_path / "paper.pdf"
@@ -1813,7 +1810,6 @@ def test_episode_page_lists_every_rendering(public_client, env, tmp_path, monkey
 
     import app as app_mod
     monkeypatch.setattr(app_mod, "tts_choices", lambda: ["model-a", "model-b"])
-    monkeypatch.setattr(app_mod, "PAPERS_DIR", env["papers"])
     public_client.post("/admin/login", data={"password": "hunter2"})
 
     pdf = tmp_path / "paper.pdf"
@@ -1845,7 +1841,8 @@ def test_versions_are_admin_only(public_client, env, tmp_path, monkeypatch):
                    audio_path=str(tmp_path / "a.pdf"))
     row = db.get_episode(eid)
     db.create_episode("SIB", "/tmp/s.pdf", row["sha256"], status="done")
-    db.update_episode("SIB", title="Sibling", status="done", tts_model="model-b")
+    db.update_episode("SIB", status="done", tts_model="model-b")
+    db.update_principal("SIB", title="Sibling")
 
     html = public_client.get(f"/episode/{eid}").text
     assert "renderings of this paper" not in html
@@ -1939,7 +1936,6 @@ def test_script_falls_back_when_the_model_has_no_quota(env, tmp_path, monkeypatc
     monkeypatch.setattr(script_mod, "call_with_retry", fake_call)
     monkeypatch.setattr(script_mod, "record_cost", lambda *a, **k: 0.0)
     monkeypatch.setattr(script_mod, "pdf_part", lambda p: None)
-    monkeypatch.setattr(script_mod, "PAPERS_DIR", env["papers"])
 
     out = _REAL_GENERATE_SCRIPT(eid, cfg)
     assert out == SAMPLE_SCRIPT
@@ -1958,7 +1954,6 @@ def test_script_fails_when_there_is_no_fallback(env, tmp_path, monkeypatch):
     eid = ingest.ingest_pdf(pdf, env["cfg"])
     cfg = {**env["cfg"], "script": {**env["cfg"]["script"], "fallback_model": ""}}
 
-    monkeypatch.setattr(script_mod, "PAPERS_DIR", env["papers"])
     monkeypatch.setattr(script_mod, "pdf_part", lambda p: None)
     monkeypatch.setattr(
         script_mod, "call_with_retry",
@@ -2013,8 +2008,8 @@ def test_progress_reaches_the_admin_pages(client, env):
     db.create_episode("ESHOW", "/tmp/s.pdf", "sha-show", status="synthesizing")
     stale = (datetime.now(timezone.utc)
              - timedelta(seconds=app_mod.STALL_AFTER_S + 60)).isoformat()
-    db.update_episode("ESHOW", title="A Paper",
-                      progress="synthesizing chunk 3 of 12", progress_at=stale)
+    db.update_episode("ESHOW", progress="synthesizing chunk 3 of 12", progress_at=stale)
+    db.update_principal("ESHOW", title="A Paper")
 
     for url in ("/admin", "/episode/ESHOW"):
         body = client.get(url).text
@@ -2524,9 +2519,8 @@ def _tagged(env, tmp_path, name, tags, published=True):
     pdf = tmp_path / name
     _make_pdf(pdf)
     eid = ingest.ingest_pdf(pdf, env["cfg"])
-    db.update_episode(eid, status="done", published=1 if published else 0,
-                      flags_reviewed=1, title=name,
-                      categories=json.dumps(tags))
+    db.update_episode(eid, status="done", published=1 if published else 0, flags_reviewed=1)
+    db.update_principal(eid, title=name, categories=json.dumps(tags))
     return eid
 
 
@@ -2611,7 +2605,7 @@ def test_categories_are_editable_in_the_admin(client, env, tmp_path):
     assert db.episode_categories(db.get_episode(eid)) == []
 
     # A form without the marker leaves them alone.
-    db.update_episode(eid, categories=json.dumps(["ai"]))
+    db.update_principal(eid, categories=json.dumps(["ai"]))
     client.post(f"/episode/{eid}/edit", data={"summary": "Just the summary."})
     assert db.episode_categories(db.get_episode(eid)) == ["ai"]
 
@@ -2633,8 +2627,8 @@ def _paper(env, tmp_path, name, *, year, cited, created):
     pdf = tmp_path / name
     _make_pdf(pdf)
     eid = ingest.ingest_pdf(pdf, env["cfg"])
-    db.update_episode(eid, status="done", published=1, flags_reviewed=1,
-                      title=name, year=year, cited_by=cited, created_at=created)
+    db.update_episode(eid, status="done", published=1, flags_reviewed=1, created_at=created)
+    db.update_principal(eid, title=name, year=year, cited_by=cited)
     return eid
 
 
@@ -2689,9 +2683,9 @@ def test_sort_and_category_compose(client, env, tmp_path):
                created="2026-02-01T00:00:00+00:00")
     c = _paper(env, tmp_path, "econ.pdf", year=1994, cited=99999,
                created="2026-03-01T00:00:00+00:00")
-    db.update_episode(a, categories=json.dumps(["ai"]))
-    db.update_episode(b, categories=json.dumps(["ai"]))
-    db.update_episode(c, categories=json.dumps(["economics"]))
+    db.update_principal(a, categories=json.dumps(["ai"]))
+    db.update_principal(b, categories=json.dumps(["ai"]))
+    db.update_principal(c, categories=json.dumps(["economics"]))
 
     body = client.get("/?sort=cited&category=ai").text
     assert "econ.pdf" not in body, "the category filter still applies"
@@ -2855,9 +2849,8 @@ def _live_episode(env, tmp_path, name="feed.pdf", duration=612.4):
     eid = ingest.ingest_pdf(pdf, env["cfg"])
     mp3 = env["final"] / f"{eid}.mp3"
     mp3.write_bytes(b"\xff\xfb" + b"\0" * 5000)
-    db.update_episode(eid, status="done", published=1, flags_reviewed=1,
-                      title=name, audio_path=str(mp3), duration_s=duration,
-                      authors=json.dumps(["A Person"]), summary="A blurb.")
+    db.update_episode(eid, status="done", published=1, flags_reviewed=1, audio_path=str(mp3), duration_s=duration)
+    db.update_principal(eid, title=name, authors=json.dumps(["A Person"]), summary="A blurb.")
     # This stands in for an episode the pipeline built, so it carries the
     # spoken disclosure the pipeline would have recorded.
     chunk_dir = env["chunks"] / eid
@@ -3046,9 +3039,8 @@ def _vis_paper(env, tmp_path, name, *, published, cats=(), cited=None):
     pdf = tmp_path / name
     _make_pdf(pdf)
     eid = ingest.ingest_pdf(pdf, env["cfg"])
-    db.update_episode(eid, status="done", published=1 if published else 0,
-                      flags_reviewed=1, title=name, cited_by=cited,
-                      categories=json.dumps(list(cats)))
+    db.update_episode(eid, status="done", published=1 if published else 0, flags_reviewed=1)
+    db.update_principal(eid, title=name, cited_by=cited, categories=json.dumps(list(cats)))
     return eid
 
 
@@ -3222,7 +3214,7 @@ def test_editing_the_title_marks_the_recorded_disclosure_stale(client, env, tmp_
     assert "Spoken disclosure" in html
     assert "still announces the old wording" not in html
 
-    db.update_episode(episode_id, title="A Corrected Title")
+    db.update_principal(episode_id, title="A Corrected Title")
     html = client.get(f"/episode/{episode_id}").text
     assert "still announces the old wording" in html
     assert "A Corrected Title" in html
@@ -3453,8 +3445,9 @@ def test_a_reaccepted_paper_surfaces_as_a_new_upload(client, env, tmp_path):
     with pytest.raises(PipelineError):
         ingest.ingest_pdf(big, {**env["cfg"],
                                 "script": {**env["cfg"]["script"], "max_pages": 3}})
-    big_id = db.find_by_sha(
+    big_paper = db.find_paper_by_sha(
         __import__("hashlib").sha256(big.read_bytes()).hexdigest())["id"]
+    big_id = db.episodes_for_paper(big_paper)[0]["id"]
     first_stamp = db.get_episode(big_id)["created_at"]
 
     # Re-uploaded once the limit allows it.
@@ -3721,7 +3714,7 @@ def test_the_dossier_is_shown_with_its_sources(client, env, tmp_path):
     import db, json as _json
 
     episode_id = _done_episode(env, tmp_path)
-    db.update_episode(episode_id, dossier_json=_json.dumps({
+    db.update_principal(episode_id, dossier_json=_json.dumps({
         "reception": "Read as an attack on rationality it did not intend.",
         "entries": [{"who": "Imre Lakatos", "kind": "critic",
                      "what": "Proposed research programmes as the middle way.",
@@ -3731,3 +3724,26 @@ def test_the_dossier_is_shown_with_its_sources(client, env, tmp_path):
     assert "Imre Lakatos" in html
     assert "https://example.org/lakatos" in html
     assert "an attack on rationality" in html
+
+
+def test_a_paper_already_stored_is_not_stored_twice(env, tmp_path):
+    """A paper that arrived as somebody else's reference is already on disk.
+    Uploading it on its own should give it an episode on that paper, not a
+    second copy of the same bytes to keep in step."""
+    import hashlib
+    import shutil as _shutil
+
+    import db
+    from pipeline import ingest
+
+    pdf = tmp_path / "shared.pdf"
+    _make_pdf(pdf)
+    sha = hashlib.sha256(pdf.read_bytes()).hexdigest()
+
+    # Stored the way a reference is: a paper row and its bytes, no episode.
+    paper_id = db.create_paper(source_path=str(pdf), sha256=sha)
+    _shutil.copy2(pdf, db.paper_pdf(paper_id))
+
+    episode_id = ingest.ingest_pdf(pdf, env["cfg"])
+    assert db.principal_paper(episode_id)["id"] == paper_id
+    assert len(list(env["papers"].glob("*.pdf"))) == 1, "no second copy"

@@ -508,11 +508,11 @@ def test_dedupe_by_content_hash_not_title():
 
     db.create_episode("EP1", "/tmp/a.pdf", "hash-aaa")
     db.create_episode("EP2", "/tmp/b.pdf", "hash-bbb")
-    db.update_episode("EP1", title="Minimum Wages and Employment", year=1994)
-    db.update_episode("EP2", title="Minimum Wages and Employment", year=2019)
+    db.update_principal("EP1", title="Minimum Wages and Employment", year=1994)
+    db.update_principal("EP2", title="Minimum Wages and Employment", year=2019)
 
-    assert db.find_by_sha("hash-aaa")["id"] == "EP1"
-    assert db.find_by_sha("hash-bbb")["id"] == "EP2"
+    assert db.episodes_for_paper(db.find_paper_by_sha("hash-aaa")["id"])[0]["id"] == "EP1"
+    assert db.episodes_for_paper(db.find_paper_by_sha("hash-bbb")["id"])[0]["id"] == "EP2"
     assert len(db.list_episodes()) == 2, "same title, different content = two episodes"
 
 
@@ -968,8 +968,8 @@ def test_a_retired_script_model_falls_back(tmp_path, monkeypatch):
     db.create_episode("ERET", "/tmp/r.pdf", "sha-ret")
     papers = tmp_path / "papers"
     papers.mkdir()
-    (papers / "ERET.pdf").write_bytes(b"%PDF-1.4 fake")
-    monkeypatch.setattr(script_mod, "PAPERS_DIR", papers)
+    monkeypatch.setattr(db, "PAPERS_DIR", papers)
+    db.paper_pdf(db.principal_paper("ERET")["id"]).write_bytes(b"%PDF-1.4 fake")
 
     tried = []
 
@@ -1152,8 +1152,7 @@ def test_a_lookup_failure_never_touches_the_episode(_isolated_db, monkeypatch):
     from pipeline import citations, ingest
 
     db.create_episode("ECITE", "/tmp/c.pdf", "sha-cite")
-    db.update_episode("ECITE", title="A Paper", cited_by=12,
-                      cited_by_source="entered by hand")
+    db.update_principal("ECITE", title="A Paper", cited_by=12, cited_by_source="entered by hand")
 
     monkeypatch.setattr(citations, "lookup",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
@@ -1209,8 +1208,7 @@ def test_intro_names_the_paper_and_says_it_is_ai_generated(_isolated_db):
     from pipeline import intro
 
     db.create_episode("EINTRO", "/tmp/i.pdf", "sha-intro")
-    db.update_episode("EINTRO", title="Minimum Wages and Employment",
-                      authors=json.dumps(["David Card", "Alan Krueger"]))
+    db.update_principal("EINTRO", title="Minimum Wages and Employment", authors=json.dumps(["David Card", "Alan Krueger"]))
 
     text = intro.intro_text(db.get_episode("EINTRO"), _intro_cfg())
     assert "AI generated" in text
@@ -1232,7 +1230,7 @@ def test_intro_does_not_announce_an_uncredited_author(_isolated_db):
     from pipeline import intro
 
     db.create_episode("EINTRO3", "/tmp/i.pdf", "sha-intro3")
-    db.update_episode("EINTRO3", title="A Paper With No Byline")
+    db.update_principal("EINTRO3", title="A Paper With No Byline")
 
     text = intro.intro_text(db.get_episode("EINTRO3"), _intro_cfg())
     assert "uncredited" not in text
@@ -1244,8 +1242,7 @@ def test_intro_does_not_double_the_full_stop_after_et_al(_isolated_db):
     from pipeline import intro
 
     db.create_episode("EINTRO4", "/tmp/i.pdf", "sha-intro4")
-    db.update_episode("EINTRO4", title="Attention Is All You Need",
-                      authors=json.dumps(["A", "B", "C", "D", "E"]))
+    db.update_principal("EINTRO4", title="Attention Is All You Need", authors=json.dumps(["A", "B", "C", "D", "E"]))
 
     text = intro.intro_text(db.get_episode("EINTRO4"), _intro_cfg())
     assert text.endswith("by A et al.")
@@ -1259,7 +1256,7 @@ def test_intro_uses_one_voice_that_is_neither_host(_isolated_db, monkeypatch):
     from pipeline import intro
 
     db.create_episode("EINTRO5", "/tmp/i.pdf", "sha-intro5")
-    db.update_episode("EINTRO5", title="A Paper", authors=json.dumps(["Solo"]))
+    db.update_principal("EINTRO5", title="A Paper", authors=json.dumps(["Solo"]))
     monkeypatch.setattr(intro, "CHUNKS_DIR", tmp_chunks())
 
     captured = {}
@@ -1316,7 +1313,7 @@ def test_intro_is_resynthesized_only_when_its_words_change(_isolated_db, monkeyp
     from pipeline import intro
 
     db.create_episode("EINTRO6", "/tmp/i.pdf", "sha-intro6")
-    db.update_episode("EINTRO6", title="First Title", authors=json.dumps(["Solo"]))
+    db.update_principal("EINTRO6", title="First Title", authors=json.dumps(["Solo"]))
     monkeypatch.setattr(intro, "CHUNKS_DIR", tmp_chunks())
 
     calls = []
@@ -1332,7 +1329,7 @@ def test_intro_is_resynthesized_only_when_its_words_change(_isolated_db, monkeyp
     intro.synthesize_intro("EINTRO6", _intro_cfg())
     assert len(calls) == 1, "unchanged wording must reuse the WAV on disk"
 
-    db.update_episode("EINTRO6", title="Second Title")
+    db.update_principal("EINTRO6", title="Second Title")
     intro.synthesize_intro("EINTRO6", _intro_cfg())
     assert len(calls) == 2
     assert "Second Title" in calls[1]
@@ -1347,8 +1344,7 @@ def test_shipped_intro_template_reads_as_a_sentence(_isolated_db):
     from pipeline import intro
 
     db.create_episode("EINTRO7", "/tmp/i.pdf", "sha-intro7")
-    db.update_episode("EINTRO7", title="Some Important Paper",
-                      authors=json.dumps(["Ada Lovelace"]))
+    db.update_principal("EINTRO7", title="Some Important Paper", authors=json.dumps(["Ada Lovelace"]))
 
     cfg = load_config()
     text = intro.intro_text(db.get_episode("EINTRO7"), cfg)
@@ -1612,9 +1608,12 @@ def test_a_revoiced_rendering_inherits_its_siblings_number(_isolated_db):
     unpublishes the other. A new number would advertise a duplicate."""
     import db
 
-    db.create_episode("EORIG", "/tmp/p.pdf", "same-sha")
+    # A re-voicing is the same paper, not merely the same bytes -- it shares
+    # the paper row, which is what makes it a sibling.
+    paper = db.create_paper(source_path="/tmp/p.pdf", sha256="same-sha")
+    db.create_episode("EORIG", "/tmp/p.pdf", "same-sha", papers=[paper])
     db.create_episode("EOTHER", "/tmp/q.pdf", "other-sha")
-    db.create_episode("ECLONE", "/tmp/p.pdf", "same-sha")
+    db.create_episode("ECLONE", "/tmp/p.pdf", "same-sha", papers=[paper])
 
     assert db.assign_episode_number("EORIG") == 1
     assert db.assign_episode_number("EOTHER") == 2
@@ -2217,11 +2216,11 @@ def test_an_unknown_kind_falls_back_to_the_empirical_arc(_isolated_db):
     db.create_episode("EKIND", "/tmp/k.pdf", "sha-kind")
     assert arc.kind_of(db.get_episode("EKIND")) == arc.EMPIRICAL
 
-    db.update_episode("EKIND", work_kind="philosophy")
+    db.update_principal("EKIND", work_kind="philosophy")
     assert arc.kind_of(db.get_episode("EKIND")) == arc.EMPIRICAL
     assert arc.clean_kind("THEORETICAL") == arc.THEORETICAL
 
-    db.update_episode("EKIND", work_kind="theoretical")
+    db.update_principal("EKIND", work_kind="theoretical")
     assert arc.kind_of(db.get_episode("EKIND")) == arc.THEORETICAL
 
 
@@ -2240,3 +2239,164 @@ def test_a_script_with_no_research_is_told_to_hedge(_isolated_db):
     db.create_episode("ENOD", "/tmp/d.pdf", "sha-nod")
     brief = script._dossier_brief(db.get_episode("ENOD"))
     assert "No research was done" in brief and "Hedge" in brief
+
+
+# ------------------------------------------------- papers, split from episodes
+
+def test_an_episode_always_has_a_paper(_isolated_db):
+    """The two tables are only safe to read separately if the join is never
+    missing. Every route into create_episode has to produce one."""
+    import db
+
+    db.create_episode("EPAP", "/tmp/p.pdf", "sha-pap")
+    papers = db.papers_for("EPAP")
+    assert len(papers) == 1
+    assert papers[0]["sha256"] == "sha-pap"
+    assert papers[0]["role"] == db.PRINCIPAL
+    assert db.principal_paper("EPAP")["id"] == papers[0]["id"]
+
+
+def test_paper_facts_are_refused_by_update_episode(_isolated_db):
+    """The pre-split columns are still on the episode table, so a stray write
+    would land somewhere real, succeed, and never be read again. It has to
+    fail loudly or it fails silently."""
+    import db
+    import pytest
+
+    db.create_episode("EGUARD", "/tmp/g.pdf", "sha-guard")
+    with pytest.raises(ValueError) as exc:
+        db.update_episode("EGUARD", title="Wrong Door")
+    assert "update_principal" in str(exc.value)
+    # And the episode's own fields still go through.
+    db.update_episode("EGUARD", status="done")
+    assert db.get_episode("EGUARD")["status"] == "done"
+
+
+def test_the_episode_reads_its_principals_facts(_isolated_db):
+    import db
+
+    db.create_episode("EREAD", "/tmp/r.pdf", "sha-read")
+    db.update_principal("EREAD", title="A Paper", year=1994)
+    row = db.get_episode("EREAD")
+    assert row["title"] == "A Paper" and row["year"] == 1994
+    assert row["paper_id"] == db.principal_paper("EREAD")["id"]
+
+
+def test_a_correction_reaches_every_episode_on_that_paper(_isolated_db):
+    """The point of the split. Two renderings of one work share the row the
+    title lives in, so fixing a botched extraction fixes both."""
+    import db
+
+    paper = db.create_paper(source_path="/tmp/s.pdf", sha256="sha-shared")
+    db.create_episode("EA", "/tmp/s.pdf", "sha-shared", papers=[paper])
+    db.create_episode("EB", "/tmp/s.pdf", "sha-shared", papers=[paper])
+    db.update_principal("EA", title="Corrected Title")
+    assert db.get_episode("EB")["title"] == "Corrected Title"
+
+
+def test_siblings_need_the_whole_paper_set_to_match(_isolated_db):
+    """Overlap is not sameness. A comparison of two papers and a solo episode
+    about one of them share a paper, but publishing one must not unpublish the
+    other -- they are different episodes, not two takes on the same one."""
+    import db
+
+    one = db.create_paper(source_path="/tmp/1.pdf", sha256="sha-1")
+    two = db.create_paper(source_path="/tmp/2.pdf", sha256="sha-2")
+    db.create_episode("SOLO", "/tmp/1.pdf", "sha-1", papers=[one])
+    db.create_episode("PAIR", "/tmp/1.pdf", "sha-1", papers=[one, two])
+    db.create_episode("PAIR2", "/tmp/1.pdf", "sha-1", papers=[one, two])
+
+    assert [s["id"] for s in db.siblings("SOLO")] == []
+    assert [s["id"] for s in db.siblings("PAIR")] == ["PAIR2"]
+
+    db.update_episode("PAIR2", published=1)
+    assert db.demote_siblings("PAIR") == ["PAIR2"]
+    assert db.get_episode("PAIR2")["published"] == 0
+
+
+def test_deleting_an_episode_keeps_a_paper_something_else_uses(_isolated_db):
+    """A shared paper is one file on disk. Deleting one of the episodes that
+    point at it must not take the bytes out from under the others."""
+    import db
+
+    paper = db.create_paper(source_path="/tmp/k.pdf", sha256="sha-keep")
+    db.create_episode("EK1", "/tmp/k.pdf", "sha-keep", papers=[paper])
+    db.create_episode("EK2", "/tmp/k.pdf", "sha-keep", papers=[paper])
+
+    assert db.delete_episode("EK1") == [], "still referenced, so not an orphan"
+    assert db.get_paper(paper) is not None
+    assert db.delete_episode("EK2") == [paper], "now nothing points at it"
+    assert db.get_paper(paper) is None
+
+
+def test_the_migration_gives_old_episodes_the_paper_they_implied(tmp_path,
+                                                                monkeypatch):
+    """An existing library has to survive the upgrade, and it has to survive it
+    without moving any files: the new paper takes the episode's own id, which
+    is what the stored PDF is already named."""
+    import sqlite3
+    import db
+
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "old.db")
+    db._local.__dict__.clear()
+
+    # A pre-split database: episode table only, paper facts on the row.
+    conn = sqlite3.connect(db.DB_PATH)
+    conn.execute("CREATE TABLE episode (id TEXT PRIMARY KEY, created_at TEXT NOT NULL,"
+                 " source_path TEXT NOT NULL, sha256 TEXT, title TEXT, status TEXT NOT NULL)")
+    conn.execute("INSERT INTO episode VALUES ('OLD1', '2026-01-01T00:00:00+00:00',"
+                 " '/tmp/old.pdf', 'sha-old', 'An Older Paper', 'done')")
+    conn.commit()
+    conn.close()
+    db._local.__dict__.clear()
+
+    db.init_db()
+    row = db.get_episode("OLD1")
+    assert row["title"] == "An Older Paper", "the facts came across"
+    assert row["paper_id"] == "OLD1", "and the stored PDF keeps its filename"
+    assert db.paper_pdf("OLD1").name == "OLD1.pdf"
+
+    # Idempotent: a second start must not deal it a second paper.
+    db.init_db()
+    assert len(db.papers_for("OLD1")) == 1
+
+
+def test_every_attached_paper_is_sent_to_the_script_model(tmp_path, monkeypatch):
+    """The comparison episodes this split exists for are worthless if only the
+    first paper reaches the writer -- and a summary of the second is not the
+    same thing as the second, which is the whole reason the PDFs go natively."""
+    import db
+    from pipeline import script as script_mod
+
+    papers = tmp_path / "papers"
+    papers.mkdir()
+    monkeypatch.setattr(db, "PAPERS_DIR", papers)
+
+    first = db.create_paper(source_path="/tmp/1.pdf", sha256="sha-m1")
+    second = db.create_paper(source_path="/tmp/2.pdf", sha256="sha-m2")
+    db.create_episode("EMULTI", "/tmp/1.pdf", "sha-m1", papers=[first, second])
+    for paper_id in (first, second):
+        db.paper_pdf(paper_id).write_bytes(b"%PDF-1.4 fake")
+
+    sent = []
+
+    class Resp:
+        text = "HOST_A: Hello there everyone.\nHOST_B: Good to be here."
+        usage_metadata = None
+        candidates = []
+
+    def fake_generate_content(*, model, contents, config):
+        sent.append([c for c in contents if str(c).startswith("PART:")])
+        return Resp()
+
+    monkeypatch.setattr(script_mod, "client",
+                        lambda: type("C", (), {"models": type("M", (), {
+                            "generate_content": staticmethod(fake_generate_content)})()})())
+    monkeypatch.setattr(script_mod, "pdf_part", lambda p: f"PART:{p.name}")
+
+    cfg = {"models": {"script": "m"}, "script": {"target_words": 1600},
+           "retry": {"attempts": 1, "base_delay_s": 0, "max_delay_s": 0}}
+    script_mod.generate_script("EMULTI", cfg)
+
+    assert sent == [[f"PART:{first}.pdf", f"PART:{second}.pdf"]], (
+        "both papers, in running order")

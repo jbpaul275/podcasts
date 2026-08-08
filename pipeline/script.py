@@ -9,7 +9,7 @@ import logging
 import re
 
 import db
-from config import PAPERS_DIR, load_prompt
+from config import load_prompt
 from . import ModelUnusable, PipelineError
 from . import arc as arc_mod
 from .gemini import (call_with_retry, client, pdf_part, record_cost,
@@ -274,16 +274,16 @@ def generate_script(episode_id: str, cfg: dict, instructions: str | None = None,
 
 def _write_script(episode_id: str, cfg: dict, user: str, model: str | None,
                   label: str) -> str:
-    pdf_path = PAPERS_DIR / f"{episode_id}.pdf"
-    if not pdf_path.exists():
-        raise PipelineError(f"missing source PDF {pdf_path}")
+    paths = db.paper_paths(episode_id)
+    if not paths:
+        raise PipelineError(f"no source PDF stored for episode {episode_id}")
 
     system = load_prompt("script_system.md").replace(
         "$ARC", arc_mod.text(arc_mod.kind_of(db.get_episode(episode_id))))
     if cfg.get("script", {}).get("grounding"):
         system += "\n\n" + load_prompt("script_grounding.md")
     gen_cfg = _script_config(cfg, system)
-    part = pdf_part(pdf_path)
+    parts = [pdf_part(p) for p in paths]
 
     candidates = _script_models(cfg, prefer=model)
     resp = None
@@ -291,7 +291,7 @@ def _write_script(episode_id: str, cfg: dict, user: str, model: str | None,
         try:
             resp = call_with_retry(
                 lambda m=model: client().models.generate_content(
-                    model=m, contents=[part, user], config=gen_cfg
+                    model=m, contents=[*parts, user], config=gen_cfg
                 ),
                 cfg, model, label=label,
             )

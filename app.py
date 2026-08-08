@@ -37,7 +37,6 @@ from config import (
     CHUNKS_DIR,
     FINAL_DIR,
     INBOX_DIR,
-    PAPERS_DIR,
     PROCESSED_DIR,
     ROOT,
     categories,
@@ -506,17 +505,19 @@ def _paper_text(episode_id: str) -> str | None:
     citation from a name the paper genuinely uses."""
     if episode_id in _paper_text_cache:
         return _paper_text_cache[episode_id] or None
-    path = PAPERS_DIR / f"{episode_id}.pdf"
-    if not path.exists():
-        return None
-    try:
-        import fitz
+    import fitz
 
-        with fitz.open(path) as doc:
-            text = "\n".join(page.get_text() for page in doc)
-    except Exception:
-        log.warning("could not extract text from %s for flag checking", path)
-        text = ""
+    # Every paper the episode was built from. A name that appears in any of
+    # them was read, not invented, so a comparison episode must not flag its
+    # second paper's authors as fabrications.
+    found = []
+    for path in db.paper_paths(episode_id):
+        try:
+            with fitz.open(path) as doc:
+                found.append("\n".join(page.get_text() for page in doc))
+        except Exception:
+            log.warning("could not extract text from %s for flag checking", path)
+    text = "\n".join(found)
     _paper_text_cache[episode_id] = text
     return text or None
 
@@ -868,7 +869,13 @@ async def edit_episode(request: Request, episode_id: str):
         except ValueError:
             fields["year"] = None
 
-    db.update_episode(episode_id, **fields)
+    # One form, two rows behind it: the episode owns its own title and nothing
+    # else here. Everything else is a fact about the work, and belongs to the
+    # paper so that a re-voicing or a comparison sees the correction too.
+    paper_fields = {k: v for k, v in fields.items() if k in db.PAPER_FIELDS}
+    db.update_episode(episode_id,
+                      **{k: v for k, v in fields.items() if k not in paper_fields})
+    db.update_principal(episode_id, **paper_fields)
     return _done(episode_id, "edited")
 
 
@@ -895,7 +902,7 @@ def set_published(request: Request, episode_id: str,
         # are still private, or that are alternate renderings would otherwise
         # eat numbers the feed never shows.
         db.assign_episode_number(episode_id)
-        demoted = db.demote_siblings(row["sha256"], episode_id)
+        demoted = db.demote_siblings(episode_id)
         if demoted:
             log.info("episode %s is now canonical; unpublished %s", episode_id, demoted)
     if not want and reviewed:
@@ -1026,13 +1033,17 @@ def clone_episode(request: Request, episode_id: str, tts_model: str = Form("")):
         raise HTTPException(400, f"unknown TTS model {tts_model!r}")
 
     new_id = db.new_ulid()
-    db.create_episode(new_id, src["source_path"], src["sha256"], status="queued")
-    shutil.copy2(PAPERS_DIR / f"{episode_id}.pdf", PAPERS_DIR / f"{new_id}.pdf")
+    db.create_episode(new_id, src["source_path"], src["sha256"], status="queued",
+                      papers=[])
+    # The clone points at the same papers rather than copying them. It is the
+    # same work by definition -- that is what makes the comparison fair -- so a
+    # second copy of the PDF would only be a second thing to correct.
+    for paper in db.papers_for(episode_id):
+        db.attach_paper(new_id, paper["id"], position=paper["position"],
+                        role=paper["role"])
     db.update_episode(
         new_id,
-        title=src["title"], authors=src["authors"], year=src["year"],
-        abstract=src["abstract"], venue=src["venue"], summary=src["summary"],
-        episode_title=src["episode_title"], source_url=src["source_url"],
+        episode_title=src["episode_title"],
         script_md=src["script_md"], flags_reviewed=src["flags_reviewed"],
         tts_model=tts_model, status="queued",
     )
@@ -1387,7 +1398,7 @@ def episode_page(request: Request, episode_id: str, done: str = ""):
     view = _episode_view(row)
     versions = []
     if admin_mode:
-        for sib in db.siblings(row["sha256"], episode_id):
+        for sib in db.siblings(episode_id):
             sv = _episode_view(sib)
             versions.append(sv)
         if versions:
@@ -1505,10 +1516,13 @@ def delete_episode(request: Request, episode_id: str):
     row = db.get_episode(episode_id)
     if not row:
         raise HTTPException(404, "no such episode")
-    (PAPERS_DIR / f"{episode_id}.pdf").unlink(missing_ok=True)
     (FINAL_DIR / f"{episode_id}.mp3").unlink(missing_ok=True)
     shutil.rmtree(CHUNKS_DIR / episode_id, ignore_errors=True)
-    db.delete_episode(episode_id)
+    # Papers outlive episodes when something else still points at them -- a
+    # re-voicing, or a comparison this paper also appears in. delete_episode
+    # reports the ones nothing refers to any more, and only those lose bytes.
+    for paper_id in db.delete_episode(episode_id):
+        db.paper_pdf(paper_id).unlink(missing_ok=True)
     return JSONResponse({"deleted": episode_id})
 
 

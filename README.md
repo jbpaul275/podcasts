@@ -21,6 +21,14 @@ PDF → ingest → script → TTS → assemble → MP3
 
 Every stage writes its output to disk and its status to SQLite before the next one starts, so a crash is resumable from the last completed stage. TTS in particular resumes at the chunk level — killing the process mid-synthesis and restarting will not regenerate the script.
 
+### Papers and episodes
+
+A **paper** is a work: a PDF, its title and authors, its citation count. An **episode** is a discussion of one or more papers: a script, some audio, a number in the feed. `episode_paper` joins them and carries the two facts that only exist at the join — running `position`, and whether the paper is a `principal` (what the episode is about) or a `reference` (something it draws on).
+
+A solo episode is one join row and reads exactly as it did before: `db.get_episode()` returns the episode merged with its principal paper, so `row["title"]` is still the paper's title. Anything that needs the full set asks `db.papers_for()`, and `db.paper_paths()` gives the PDFs to attach in order.
+
+Two consequences worth knowing. Correcting a botched title fixes it for every episode built on that paper, including re-voicings. And a re-voiced rendering *shares* its paper rather than copying the PDF, so deleting one episode only removes bytes when nothing else points at them.
+
 ## Setup
 
 Requires Python 3.11+ and the `ffmpeg` binary (`ffmpeg` and `ffprobe` on `PATH`).
