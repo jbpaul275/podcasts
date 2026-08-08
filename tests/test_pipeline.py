@@ -1644,6 +1644,30 @@ _QUOTA_BODY = {
     }
 }
 
+# The real body from a paid project that had spent its day on TTS. Note what it
+# is NOT: the quotaId carries no -FreeTier, and the retry window is under two
+# hours rather than the time to midnight -- the allowance rolls rather than
+# resetting on a calendar day.
+_PAID_DAILY_BODY = {
+    "error": {
+        "code": 429,
+        "message": ("You exceeded your current quota. * Quota exceeded for metric: "
+                    "generativelanguage.googleapis.com/generate_requests_per_model_per_day, "
+                    "limit: 100, model: gemini-3.1-flash-tts. "
+                    "Please retry in 1h52m56.409571576s."),
+        "status": "RESOURCE_EXHAUSTED",
+        "details": [
+            {"@type": "type.googleapis.com/google.rpc.QuotaFailure",
+             "violations": [{
+                 "quotaMetric": "generativelanguage.googleapis.com/generate_requests_per_model_per_day",
+                 "quotaId": "GenerateRequestsPerDayPerProjectPerModel",
+                 "quotaDimensions": {"location": "global", "model": "gemini-3.1-flash-tts"},
+                 "quotaValue": "100"}]},
+            {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "6776s"},
+        ],
+    }
+}
+
 _PER_MINUTE_BODY = {
     "error": {"code": 429, "message": "You exceeded your current quota", "details": [
         {"@type": "type.googleapis.com/google.rpc.QuotaFailure",
@@ -1673,8 +1697,10 @@ def test_a_daily_quota_is_not_retried_through(monkeypatch):
     msg = str(caught.value)
     assert "daily quota" in msg
     assert "limit 20" in msg
-    assert "midnight Pacific" in msg, "the only wait that actually helps"
-    assert "count against the day" in msg, (
+    assert "retry in about" in msg, (
+        "the server names the window; guessing at it got the answer wrong"
+    )
+    assert "count against the allowance" in msg, (
         "retrying into an exhausted quota spends more of it"
     )
     assert "per Cloud project, not per API key" in msg, (
@@ -1917,3 +1943,52 @@ def test_the_shipped_voice_list_is_real_ids(_isolated_db):
     assert cfg["voices"]["host_a"] in choices
     assert cfg["voices"]["host_b"] in choices
     assert len(set(choices)) == len(choices)
+
+
+def test_a_paid_daily_cap_is_told_apart_from_a_free_tier_one(monkeypatch):
+    """They produce identical 429 prose and need opposite responses: one means
+    fix your billing, the other means you are simply out for today."""
+    from pipeline import QuotaUnavailable, gemini
+
+    monkeypatch.setattr("pipeline.gemini.time.sleep", lambda s: None)
+
+    def always():
+        raise _api_error(429, _PAID_DAILY_BODY)
+
+    with pytest.raises(QuotaUnavailable) as caught:
+        gemini.call_with_retry(always, RETRY_CFG, "gemini-3.1-flash-tts", "chunk")
+
+    msg = str(caught.value)
+    assert "limit 100" in msg
+    assert "billing account" not in msg, "this project is billed; do not send them there"
+    assert "paid-tier cap" in msg
+    assert "per model" in msg, "another voice model is a bucket that is still full"
+
+
+def test_the_wait_comes_from_the_server_not_from_a_guess(monkeypatch):
+    """An earlier version asserted "resets at midnight Pacific". The real
+    payload answers a spent daily quota with under two hours, so the allowance
+    rolls rather than resetting on a calendar day."""
+    from pipeline import QuotaUnavailable, gemini
+
+    monkeypatch.setattr("pipeline.gemini.time.sleep", lambda s: None)
+
+    def always():
+        raise _api_error(429, _PAID_DAILY_BODY)
+
+    with pytest.raises(QuotaUnavailable) as caught:
+        gemini.call_with_retry(always, RETRY_CFG, "m", "chunk")
+
+    msg = str(caught.value)
+    assert "retry in about 1h52m" in msg
+    assert "midnight" not in msg
+
+
+def test_a_retry_window_reads_as_a_duration():
+    from pipeline.gemini import human_delay
+
+    assert human_delay(6776) == "1h52m"
+    assert human_delay(7200) == "2h"
+    assert human_delay(90) == "1m"
+    assert human_delay(0) == ""
+    assert human_delay(None) == ""
