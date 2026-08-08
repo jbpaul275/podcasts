@@ -139,7 +139,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(assemble, "FINAL_DIR", final)
 
     calls = {"metadata": 0, "script": 0, "revise": 0, "tts": 0, "intro": 0,
-             "outline": 0}
+             "outline": 0, "research": 0}
 
     def fake_metadata(episode_id, cfg):
         calls["metadata"] += 1
@@ -168,6 +168,9 @@ def env(tmp_path, monkeypatch):
         calls["tts"] += 1
         _write_sine_wav(wav_path, freq=200 + 40 * entry["seq"])
 
+    def fake_research(episode_id, cfg):
+        calls["research"] += 1
+
     def fake_outline(episode_id, cfg):
         calls["outline"] += 1
         import json as _json
@@ -191,6 +194,7 @@ def env(tmp_path, monkeypatch):
         run_mod, "STAGES",
         [
             ("extracting", fake_metadata),
+            ("researching", fake_research),
             ("outlining", fake_outline),
             ("scripting", run_mod._run_scripting),
             ("synthesizing", tts.synthesize),
@@ -3694,3 +3698,36 @@ def test_the_wizard_offers_a_length_policy(public_client, env, tmp_path):
     public_client.post(f"/episode/{eid}/setup", follow_redirects=False,
                        data={"action": "start", "length_policy": "long"})
     assert db.get_episode(eid)["length_policy"] == "long"
+
+
+def test_the_wizard_offers_research_and_it_is_off_by_default(public_client, env, tmp_path):
+    """Overkill for most papers, and it costs a grounded call on top of an
+    already expensive pipeline."""
+    import db
+
+    public_client.post("/admin/login", data={"password": "hunter2"})
+    eid = _upload(public_client, tmp_path, "res.pdf")
+
+    page = public_client.get(f"/episode/{eid}/setup").text
+    assert "Research the reception" in page
+    assert 'value="off" selected' in page
+
+    public_client.post(f"/episode/{eid}/setup", follow_redirects=False,
+                       data={"action": "start", "research": "on"})
+    assert db.get_episode(eid)["research"] == "on"
+
+
+def test_the_dossier_is_shown_with_its_sources(client, env, tmp_path):
+    import db, json as _json
+
+    episode_id = _done_episode(env, tmp_path)
+    db.update_episode(episode_id, dossier_json=_json.dumps({
+        "reception": "Read as an attack on rationality it did not intend.",
+        "entries": [{"who": "Imre Lakatos", "kind": "critic",
+                     "what": "Proposed research programmes as the middle way.",
+                     "source": "https://example.org/lakatos"}]}))
+
+    html = client.get(f"/episode/{episode_id}").text
+    assert "Imre Lakatos" in html
+    assert "https://example.org/lakatos" in html
+    assert "an attack on rationality" in html

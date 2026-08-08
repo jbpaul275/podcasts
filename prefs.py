@@ -22,6 +22,7 @@ FIELDS = {
     "voice_a": "voice_a",
     "voice_b": "voice_b",
     "length_policy": "length_policy",
+    "research": "research",
 }
 
 LABELS = {
@@ -31,6 +32,7 @@ LABELS = {
     "voice_a": "Host A voice",
     "voice_b": "Host B voice",
     "length_policy": "Episode length",
+    "research": "Research the reception",
 }
 
 
@@ -55,6 +57,10 @@ def defaults(cfg: dict) -> dict[str, str]:
         "voice_b": voices.get("host_b", ""),
         # "auto" is the point of the outline stage: the paper decides.
         "length_policy": "auto",
+        # Off by default: a search-grounded call on top of an already expensive
+        # pipeline, and most papers do not need it. Worth it for work whose
+        # interest is in how it was received rather than what it says.
+        "research": "off",
     }
 
 
@@ -77,6 +83,7 @@ def choices(cfg: dict) -> dict[str, list[str]]:
         "voice_a": _dedupe([base["voice_a"], *voices]),
         "voice_b": _dedupe([base["voice_b"], *voices]),
         "length_policy": _dedupe(["auto", *(scfg.get("lengths") or {})]),
+        "research": ["off", "on"],
     }
 
 

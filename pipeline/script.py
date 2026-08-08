@@ -11,6 +11,7 @@ import re
 import db
 from config import PAPERS_DIR, load_prompt
 from . import ModelUnusable, PipelineError
+from . import arc as arc_mod
 from .gemini import (call_with_retry, client, pdf_part, record_cost,
                      resolved_model, strip_fences)
 from prose import title_case
@@ -197,6 +198,22 @@ def _target_words(ep, cfg: dict) -> int:
     return int(stored) if stored else int(cfg["script"]["target_words"])
 
 
+def _dossier_brief(ep) -> str:
+    """The research, or a line saying there is none."""
+    from . import dossier as dossier_mod
+
+    data = dossier_mod.stored(ep) if ep is not None else None
+    if not data:
+        return ("No research was done for this episode. Hedge every claim about "
+                "outside work, as your instructions require.")
+    return (
+        "Every entry below was looked up and carries a source, so you may state "
+        "it plainly rather than hedging. Describe positions in your own words: "
+        "do NOT quote anyone here, and quote only from the attached work.\n\n"
+        + dossier_mod.as_brief(data)
+    )
+
+
 def _brief(ep) -> str:
     """The beat sheet, or a line saying there is not one."""
     from . import outline as outline_mod
@@ -244,6 +261,7 @@ def generate_script(episode_id: str, cfg: dict, instructions: str | None = None,
         .replace("$MIN_WORDS", str(int(target * 0.875)))
         .replace("$MAX_WORDS", str(int(target * 1.125)))
         .replace("$OUTLINE", _brief(ep))
+        .replace("$RESEARCH", _dossier_brief(ep))
     )
     if instructions and instructions.strip():
         user += (
@@ -260,7 +278,8 @@ def _write_script(episode_id: str, cfg: dict, user: str, model: str | None,
     if not pdf_path.exists():
         raise PipelineError(f"missing source PDF {pdf_path}")
 
-    system = load_prompt("script_system.md")
+    system = load_prompt("script_system.md").replace(
+        "$ARC", arc_mod.text(arc_mod.kind_of(db.get_episode(episode_id))))
     if cfg.get("script", {}).get("grounding"):
         system += "\n\n" + load_prompt("script_grounding.md")
     gen_cfg = _script_config(cfg, system)

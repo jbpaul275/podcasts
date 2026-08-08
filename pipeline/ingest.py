@@ -19,6 +19,7 @@ import db
 from config import PAPERS_DIR, categories, load_prompt
 from . import citations
 from . import DuplicateEpisode, PipelineError
+from . import arc as arc_mod
 from .gemini import call_with_retry, client, pdf_part, record_cost, strip_fences
 
 log = logging.getLogger("paperpod.ingest")
@@ -232,6 +233,9 @@ def extract_metadata(episode_id: str, cfg: dict) -> None:
         categories=json.dumps(clean_categories(meta.get("categories"), cfg)),
         doi=citations.normalize_doi(meta.get("doi")),
         venue=(meta.get("venue_or_series") or "") or None,
+        # Which arc this work needs. Anything unrecognised falls to empirical:
+        # most uploads are papers, and that is the arc with mileage on it.
+        work_kind=arc_mod.clean_kind(meta.get("kind")),
     )
     refresh_citations(episode_id, cfg)
 

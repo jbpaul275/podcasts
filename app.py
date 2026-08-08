@@ -58,6 +58,7 @@ from pipeline import (
     ingest,
     intro as intro_mod,
     run,
+    dossier as dossier_mod,
     outline as outline_mod,
     script as script_mod,
     tts as tts_mod,
@@ -542,17 +543,24 @@ def _blurb(row, limit: int = 260) -> str:
 
 
 def _grounding_corpus(row) -> str | None:
-    """Titles and domains the script model consulted. A citation absent from the
-    PDF but present here was looked up, not invented."""
+    """What the script was allowed to draw on besides the paper. A citation
+    absent from the PDF but present here was looked up, not invented."""
     g = db.grounding(row)
     sources = g.get("sources") or []
-    if not sources:
+    # The dossier is the other place an outside name can legitimately come
+    # from. Without it every critic the research turned up would flag as a
+    # possible fabrication, and a flag list that is mostly noise is one nobody
+    # reads.
+    research = dossier_mod.corroboration(dossier_mod.stored(row))
+    if not sources and not research:
         return None
     # Queries count too: searching for a name is evidence of looking it up
     # rather than inventing it, and source titles are usually the paper's title
     # rather than its authors.
     parts = [f"{s.get('title', '')} {s.get('domain', '')}" for s in sources]
     parts.extend(g.get("queries") or [])
+    if research:
+        parts.append(research)
     return " ".join(parts)
 
 
@@ -591,6 +599,7 @@ def _episode_view(row) -> dict:
         "script_model": row["script_model"] or CFG["models"]["script"],
         "grounding": db.grounding(row),
         "outline": _outline_view(row),
+        "dossier": dossier_mod.stored(row),
         "script_md_present": bool(row["script_md"]),
         "summary": _blurb(row),
         "categories": cats,
@@ -1333,7 +1342,8 @@ def episode_setup_save(request: Request, episode_id: str,
                        action: str = Form("start"),
                        metadata_model: str = Form(""), script_model: str = Form(""),
                        tts_model: str = Form(""), voice_a: str = Form(""),
-                       voice_b: str = Form(""), length_policy: str = Form("")):
+                       voice_b: str = Form(""), length_policy: str = Form(""),
+                       research: str = Form("")):
     require_admin(request)
     row = db.get_episode(episode_id)
     if not row:
@@ -1347,7 +1357,7 @@ def episode_setup_save(request: Request, episode_id: str,
 
     picked = {"metadata_model": metadata_model, "script_model": script_model,
               "tts_model": tts_model, "voice_a": voice_a, "voice_b": voice_b,
-              "length_policy": length_policy}
+              "length_policy": length_policy, "research": research}
     try:
         # Remembered for next time as well as applied here: the wizard should
         # get out of the way once it has been answered once.

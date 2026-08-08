@@ -122,6 +122,26 @@
     </details>
   {% endif %}
 
+  {% if admin and ep.dossier %}
+    <details class="plan research">
+      <summary>Research — {{ ep.dossier.entries|length }} findings on how this landed</summary>
+      {% if ep.dossier.reception %}<p class="muted">{{ ep.dossier.reception }}</p>{% endif %}
+      <p class="muted">Every entry carries a source. Ones that arrived without
+        one were dropped — an attribution nobody can check is worse than a hedge.
+        Nothing here is quoted: the hosts quote only from the paper.</p>
+      <ul>
+        {% for e in ep.dossier.entries %}
+          <li><strong>{{ e.who }}</strong>
+            <span class="muted">{{ {'critic': 'objected', 'extension': 'built on it',
+                                    'held_up': 'held up', 'did_not_hold': 'did not hold up'}[e.kind] }}</span><br>
+            {{ e.what }}<br>
+            <a class="mustland" href="{{ e.source }}" rel="noopener nofollow" target="_blank">{{ e.source }}</a>
+          </li>
+        {% endfor %}
+      </ul>
+    </details>
+  {% endif %}
+
   {% if admin and ep.outline %}
     <details class="plan">
       <summary>Plan — {{ ep.outline.minutes }} minutes, {{ ep.outline.beats|length }} beats</summary>

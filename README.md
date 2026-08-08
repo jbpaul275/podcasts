@@ -13,6 +13,7 @@ PDF → ingest → script → TTS → assemble → MP3
 | Stage | What it does |
 |---|---|
 | `ingest` | SHA-256 dedupe, size/page/text-layer validation, copy into `data/papers/`, native-PDF metadata extraction |
+| `research` | Optional. Grounded search for how the work was received — critics, extensions, what wore well |
 | `outline` | Reads the paper and plans the episode as beats, which is what decides how long it is |
 | `script` | Sends the PDF natively (so tables and figures survive) and writes the dialogue against that plan |
 | `tts` | Records the spoken AI disclosure in its own voice, then chunks the script on speaker-turn boundaries and synthesizes each chunk with two-speaker TTS |
@@ -51,6 +52,31 @@ A stored preference naming something no longer offered is dropped rather than ca
 Papers arriving through `data/inbox/` keep processing on their own, because a file dropped in a folder has nobody standing by to answer questions about it. They use the remembered preferences.
 
 An episode waiting on the wizard has status `draft`. It is not one of the pipeline stages, so the resume-on-startup sweep leaves it alone — starting it would spend money nobody authorised.
+
+### Two arcs
+
+The seven-segment arc was built for empirical papers: it asks for an identification strategy, results with magnitudes, and a missing robustness check. Hand it a work of history or philosophy and the model dutifully manufactures quantitative framing for a book that has none — three thin, awkward segments where the interesting material is elsewhere.
+
+So there are two, in `prompts/arc_empirical.md` and `prompts/arc_theoretical.md`. The theoretical arc replaces Identification and Findings with **The move** (the conceptual shift, which is the argument's machinery) and **The case** (the historical episodes and worked examples it leans on). Cold open, Pressure, Context and So what are common to both.
+
+The metadata stage picks, returning `kind` alongside the title and authors — it has read the paper anyway. Anything unrecognised falls back to empirical, since most uploads are papers and that is the arc with mileage on it.
+
+The arcs live in prompts rather than in code for two reasons: they stay editable in the browser like everything else, and defining each once means the outline stage and the writing stage cannot drift apart. `arc.segments()` parses the names out of the same file both prompts splice, so a list in code cannot disagree with the prompt.
+
+### Researching how a work landed
+
+**Off by default**, a wizard choice per episode. It sends a search-grounded pass before the outline and stores what it finds: who objected and on what grounds, who built on it, what has held up.
+
+The Context segment is otherwise the weakest part of the arc *by construction* — the script prompt forbids naming outside work that is not in the paper's own literature review, so Context comes out either hedged into meaninglessness or as a rehash of the paper's framing. For a book whose whole interest is its reception, that is fatal: the episode can only summarise the book back to you.
+
+Two rules make this safe rather than dangerous:
+
+- **Every entry carries a source URL, and an entry without one is dropped.** A dossier's whole value is that the script may lean on it, so an unverifiable one is the exact failure the citation flags exist to catch, moved a step upstream and dressed up as research. Dropped findings are counted in a `researching:unsourced` stage rather than passed along.
+- **No quotations, ever.** Putting invented words in the mouth of a named — often living — academic is the highest-risk thing this system could do, and it would ship as audio. The dossier describes positions in its own words; quotable passages come from the attached work, where they can be checked against the text.
+
+The dossier joins the paper as a **corroboration corpus** for the citation flags. Without that, every critic the research turned up would flag as a possible fabrication, and a flag list that is mostly noise is a flag list nobody reads.
+
+A failed dossier does not fail the episode. It logs `researching:none` and the script falls back to hedging, which is what it did before.
 
 ### How long an episode is
 

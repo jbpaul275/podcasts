@@ -24,12 +24,11 @@ import db
 from config import PAPERS_DIR, load_prompt
 from . import ModelUnusable, PipelineError
 from .gemini import call_with_retry, client, pdf_part, record_cost, strip_fences
+from . import arc as arc_mod
+from . import dossier as dossier_mod
 from .script import _script_config, _script_models
 
 log = logging.getLogger("paperpod.outline")
-
-SEGMENTS = ["Cold open", "Setup", "Identification", "Findings", "Pressure",
-            "Context", "So what"]
 
 DEFAULT_WPM = 160
 DEFAULT_RANGE = (5, 30)
@@ -66,7 +65,7 @@ def words_per_minute(cfg: dict) -> int:
         return DEFAULT_WPM
 
 
-def _parse(text: str) -> dict:
+def _parse(text: str, segments: list[str]) -> dict:
     data = json.loads(strip_fences(text or ""))
     if not isinstance(data, dict):
         raise ValueError("outline is not a JSON object")
@@ -82,7 +81,7 @@ def _parse(text: str) -> dict:
         # Segment names are matched case-insensitively but stored canonically:
         # the script prompt groups by them, and "Cold Open" vs "Cold open"
         # would silently make two segments out of one.
-        match = next((s for s in SEGMENTS if s.casefold() == segment.casefold()), None)
+        match = next((s for s in segments if s.casefold() == segment.casefold()), None)
         covers = str(raw.get("covers") or "").strip()
         if not match or not covers:
             continue
@@ -124,10 +123,10 @@ def resolve_length(outline: dict, cfg: dict, policy: str | None) -> tuple[int, s
     return words, ""
 
 
-def as_brief(outline: dict) -> str:
+def as_brief(outline: dict, kind: str = arc_mod.DEFAULT) -> str:
     """The beat sheet as the script prompt sees it."""
     lines = []
-    for segment in SEGMENTS:
+    for segment in arc_mod.segments(kind):
         beats = [b for b in outline.get("beats") or [] if b["segment"] == segment]
         if not beats:
             continue
@@ -162,12 +161,21 @@ def build_outline(episode_id: str, cfg: dict) -> None:
     policy = (ep["length_policy"] if ep and ep["length_policy"] else "auto")
     lo, hi = policy_range(cfg, policy)
 
+    kind = arc_mod.kind_of(ep)
+    research = dossier_mod.stored(ep)
     user = (
         load_prompt("outline.md")
+        .replace("$ARC", arc_mod.text(kind))
         .replace("$MIN_MINUTES", str(lo))
         .replace("$MAX_MINUTES", str(hi))
         .replace("$WORDS_PER_MINUTE", str(words_per_minute(cfg)))
     )
+    if research:
+        # The reception is not in the work, so without this the Context beats
+        # can only be planned as "say something about the literature".
+        user += ("\n\nRESEARCH ON HOW THIS WORK LANDED — plan the Context beats "
+                 "around what is actually here, and use it anywhere else it "
+                 "helps:\n" + dossier_mod.as_brief(research))
     part = pdf_part(pdf_path)
     wanted = (ep["script_model_wanted"] if ep and ep["script_model_wanted"] else None)
 
@@ -182,7 +190,7 @@ def build_outline(episode_id: str, cfg: dict) -> None:
                 cfg, model, label="outline",
             )
             record_cost(episode_id, model, resp, cfg, stage="outline")
-            outline = _parse(resp.text or "")
+            outline = _parse(resp.text or "", arc_mod.segments(kind))
             break
         except ModelUnusable as e:
             log.warning("outline model %s unusable (%s); trying the next", model, e)
@@ -194,6 +202,7 @@ def build_outline(episode_id: str, cfg: dict) -> None:
         raise PipelineError(f"could not produce an outline: {last}")
 
     target, clamp = resolve_length(outline, cfg, policy)
+    outline["kind"] = kind
     db.update_episode(episode_id, outline_json=json.dumps(outline),
                       target_words=target)
     log.info("episode %s outlined: %d beats, %d words (~%d min)", episode_id,
