@@ -16,7 +16,7 @@ from pathlib import Path
 import fitz  # pymupdf
 
 import db
-from config import PAPERS_DIR, categories, load_prompt
+from config import categories, load_prompt
 from . import citations
 from . import DuplicateEpisode, PipelineError
 from . import arc as arc_mod
@@ -39,38 +39,56 @@ def ingest_pdf(path: str | Path, cfg: dict, status: str = "queued") -> str:
     path = Path(path)
     sha = hashlib.sha256(path.read_bytes()).hexdigest()
 
-    existing = db.find_by_sha(sha)
-    if existing:
-        reaccepted = _recheck_rejected(existing, cfg, status)
-        if reaccepted:
-            return reaccepted
-        log.info("skipping %s: duplicate of episode %s", path.name, existing["id"])
-        raise DuplicateEpisode(existing["id"])
+    paper = db.find_paper_by_sha(sha)
+    if paper:
+        existing = db.episodes_for_paper(paper["id"])
+        for episode in existing:
+            reaccepted = _recheck_rejected(episode, paper, cfg, status)
+            if reaccepted:
+                return reaccepted
+        if existing:
+            log.info("skipping %s: duplicate of episode %s", path.name,
+                     existing[0]["id"])
+            raise DuplicateEpisode(existing[0]["id"])
+        # A known paper with no episode of its own -- it arrived as a reference
+        # in someone else's comparison. Nothing to duplicate, and no reason to
+        # store the bytes twice: give it an episode on the paper already here.
+        log.info("%s is already stored as a paper; giving it an episode",
+                 path.name)
+        return _new_episode(paper["id"], str(path), status)
 
-    episode_id = db.new_ulid()
-    dest = PAPERS_DIR / f"{episode_id}.pdf"
-    shutil.copy2(path, dest)
+    paper_id = db.create_paper(source_path=str(path), sha256=sha)
+    shutil.copy2(path, db.paper_pdf(paper_id))
 
     error = None
     try:
-        error = _validate(dest, cfg)
+        error = _validate(db.paper_pdf(paper_id), cfg)
     except Exception as e:
         error = f"could not open PDF: {e}"
 
-    db.create_episode(
-        episode_id,
-        source_path=str(path),
-        sha256=sha,
-        status="failed" if error else status,
-        error=error,
-        failed_at=db.now_iso() if error else None,
-    )
+    episode_id = _new_episode(paper_id, str(path), status, error=error)
     if error:
         raise PipelineError(error)
     return episode_id
 
 
-def _recheck_rejected(existing, cfg: dict, status: str) -> str | None:
+def _new_episode(paper_id: str, source_path: str, status: str,
+                 error: str | None = None) -> str:
+    episode_id = db.new_ulid()
+    paper = db.get_paper(paper_id)
+    db.create_episode(
+        episode_id,
+        source_path=source_path,
+        sha256=paper["sha256"] if paper else None,
+        status="failed" if error else status,
+        error=error,
+        failed_at=db.now_iso() if error else None,
+        papers=[paper_id],
+    )
+    return episode_id
+
+
+def _recheck_rejected(existing, paper, cfg: dict, status: str) -> str | None:
     """Re-validate a PDF that was turned away at ingest, and accept it if the
     rules have since changed. Returns its episode id, or None to leave it be.
 
@@ -90,7 +108,7 @@ def _recheck_rejected(existing, cfg: dict, status: str) -> str | None:
         return None
     if db.get_stage_log(existing["id"]):
         return None
-    pdf = PAPERS_DIR / f"{existing['id']}.pdf"
+    pdf = db.paper_pdf(paper["id"])
     if not pdf.exists():
         return None
 
@@ -189,9 +207,10 @@ def clean_categories(values, cfg: dict) -> list[str]:
 
 def extract_metadata(episode_id: str, cfg: dict) -> None:
     """Stage 'extracting': native-PDF metadata extraction with strict JSON output."""
-    pdf_path = PAPERS_DIR / f"{episode_id}.pdf"
-    if not pdf_path.exists():
-        raise PipelineError(f"missing source PDF {pdf_path}")
+    paper = db.principal_paper(episode_id)
+    pdf_path = db.paper_pdf(paper["id"]) if paper else None
+    if pdf_path is None or not pdf_path.exists():
+        raise PipelineError(f"missing source PDF for episode {episode_id}")
 
     from google.genai import types
 
@@ -223,8 +242,8 @@ def extract_metadata(episode_id: str, cfg: dict) -> None:
     except (TypeError, ValueError):
         year = None
 
-    db.update_episode(
-        episode_id,
+    db.update_paper(
+        paper["id"],
         title=(meta.get("title") or "").strip() or None,
         authors=json.dumps([str(a) for a in authors]),
         year=year,
@@ -271,7 +290,7 @@ def refresh_citations(episode_id: str, cfg: dict, force: bool = False) -> int | 
     if not found:
         return None
     count, source = found
-    db.update_episode(episode_id, cited_by=count, cited_by_source=source,
-                      cited_by_at=db.now_iso())
+    db.update_principal(episode_id, cited_by=count, cited_by_source=source,
+                        cited_by_at=db.now_iso())
     log.info("episode %s cited %d times per %s", episode_id, count, source)
     return count

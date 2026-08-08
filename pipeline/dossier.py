@@ -29,7 +29,7 @@ import json
 import logging
 
 import db
-from config import PAPERS_DIR, load_prompt
+from config import load_prompt
 from . import ModelUnusable, PipelineError
 from .gemini import call_with_retry, client, pdf_part, record_cost, strip_fences
 from .script import _script_models, collect_grounding
@@ -140,13 +140,13 @@ def research(episode_id: str, cfg: dict) -> None:
         log.info("episode %s did not ask for research; skipping", episode_id)
         return
 
-    pdf_path = PAPERS_DIR / f"{episode_id}.pdf"
-    if not pdf_path.exists():
-        raise PipelineError(f"source PDF missing: {pdf_path}")
+    paths = db.paper_paths(episode_id)
+    if not paths:
+        raise PipelineError(f"no source PDF stored for episode {episode_id}")
 
     from google.genai import types
 
-    part = pdf_part(pdf_path)
+    parts = [pdf_part(p) for p in paths]
     user = load_prompt("dossier.md")
     wanted_model = (ep["script_model_wanted"] if ep and ep["script_model_wanted"]
                     else None)
@@ -156,7 +156,7 @@ def research(episode_id: str, cfg: dict) -> None:
         try:
             resp = call_with_retry(
                 lambda m=model: client().models.generate_content(
-                    model=m, contents=[part, user],
+                    model=m, contents=[*parts, user],
                     config=types.GenerateContentConfig(
                         system_instruction="You research how published work was received.",
                         tools=[types.Tool(google_search=types.GoogleSearch())],
@@ -184,7 +184,7 @@ def research(episode_id: str, cfg: dict) -> None:
                              "without one; Context will be hedged as it was before."))
         return
 
-    db.update_episode(episode_id, dossier_json=json.dumps(data))
+    db.update_principal(episode_id, dossier_json=json.dumps(data))
     log.info("episode %s researched: %d entries, %d dropped for want of a source",
              episode_id, len(data["entries"]), data["dropped"])
     if data["dropped"]:

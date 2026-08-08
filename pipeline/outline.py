@@ -21,7 +21,7 @@ import json
 import logging
 
 import db
-from config import PAPERS_DIR, load_prompt
+from config import load_prompt
 from . import ModelUnusable, PipelineError
 from .gemini import call_with_retry, client, pdf_part, record_cost, strip_fences
 from . import arc as arc_mod
@@ -154,9 +154,9 @@ def stored(row) -> dict | None:
 
 def build_outline(episode_id: str, cfg: dict) -> None:
     """Stage 'outlining'. Plans the episode and sets its length."""
-    pdf_path = PAPERS_DIR / f"{episode_id}.pdf"
-    if not pdf_path.exists():
-        raise PipelineError(f"source PDF missing: {pdf_path}")
+    paths = db.paper_paths(episode_id)
+    if not paths:
+        raise PipelineError(f"no source PDF stored for episode {episode_id}")
     ep = db.get_episode(episode_id)
     policy = (ep["length_policy"] if ep and ep["length_policy"] else "auto")
     lo, hi = policy_range(cfg, policy)
@@ -176,7 +176,7 @@ def build_outline(episode_id: str, cfg: dict) -> None:
         user += ("\n\nRESEARCH ON HOW THIS WORK LANDED — plan the Context beats "
                  "around what is actually here, and use it anywhere else it "
                  "helps:\n" + dossier_mod.as_brief(research))
-    part = pdf_part(pdf_path)
+    parts = [pdf_part(p) for p in paths]
     wanted = (ep["script_model_wanted"] if ep and ep["script_model_wanted"] else None)
 
     last = None
@@ -184,7 +184,7 @@ def build_outline(episode_id: str, cfg: dict) -> None:
         try:
             resp = call_with_retry(
                 lambda m=model: client().models.generate_content(
-                    model=m, contents=[part, user],
+                    model=m, contents=[*parts, user],
                     config=_script_config(cfg, "You plan podcast episodes."),
                 ),
                 cfg, model, label="outline",
